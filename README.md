@@ -2,7 +2,7 @@
 Controlling a robotic hand using OpenBCI Cyton.
 
 ## Training a machine learning model to detect when a hand is closed (openbci/openbci_focus_hand.py)
-Programmed a machine learning model to infer when my hand is closed using EMG (muscle reading).
+Programmed a machine learning model to infer when my hand is closed using EMG ([muscle reading](https://docs.openbci.com/GettingStarted/Biosensing-Setups/EMGSetup/)).
 
 Initially the model is untrained so there is no response. Pressing 'T' enables training mode, where I calibrate what actions correspond to green or red. I decided to set green to closing and red to opening my hand.
 
