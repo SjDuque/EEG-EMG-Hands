@@ -9,14 +9,13 @@ Initially the model is untrained so there is no response. Pressing 'T' enables t
 Notice after training that the robotic hand closes and opens with mine.
 
 Note: There is no webcam use in this example, I am using an OpenBCI Cyton to read muscle activity using electrodes attached to my forearm.
+
 https://github.com/user-attachments/assets/c013bcee-4476-4542-a547-f4df26d3af68
 
 
 
 ## Controlling a robotic arm using mediapipe/camera (src/MediapipeEsp32.py)
 Using hand landmark detection from Mediapipe, I calculated the angles of my fingers and mapped them to the servos on the robotic hand.
-
-
 
 https://github.com/user-attachments/assets/08382008-1f0d-4633-aaa4-c096e12325b7
 
