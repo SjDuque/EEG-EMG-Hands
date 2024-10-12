@@ -4,6 +4,7 @@ import sys
 import numpy as np
 import pandas as pd
 import time
+import pylsl
 from pylsl import StreamInlet, resolve_stream, proc_ALL
 import threading
 
@@ -265,17 +266,35 @@ class HandTracking:
             self.close()
 
 def collect_emg_data(inlet, emg_data_list, emg_channel_count, stop_event):
-    """Function to collect EMG data at high frequency."""
+    """Collect EMG data at high frequency and convert LSL timestamps to Unix timestamps."""
+    sample_count = 0
+    lsl_to_unix_offset = time.time() - pylsl.local_clock()  # Initial LSL-to-Unix offset
+
     while not stop_event.is_set():
         try:
-            sample, _ = inlet.pull_sample()
-            data_row = {'timestamp': time.time()}
+            # Pull a sample from the inlet
+            sample, timestamp = inlet.pull_sample(timeout=1.0)
+            if sample is None:
+                continue
+
+            # Convert LSL timestamp to Unix timestamp using the offset
+            unix_timestamp = timestamp + lsl_to_unix_offset
+
+            # Create data row with Unix timestamp and EMG data
+            data_row = {'timestamp': unix_timestamp}
             for i in range(emg_channel_count):
-                data_row['emg_channel_' + str(i+1)] = sample[i]
+                data_row[f'emg_channel_{i + 1}'] = sample[i]
             emg_data_list.append(data_row)
+
+            # Periodically recalibrate the offset to account for drift
+            sample_count += 1
+            if sample_count % 1000 == 0:
+                lsl_to_unix_offset = time.time() - pylsl.local_clock()
+                
         except Exception as e:
             print(f"Error in EMG data collection: {e}")
             continue
+
 
 def main():
     # Initialize hand tracker
@@ -306,8 +325,8 @@ def main():
             print(f"  Hostname: {stream.hostname()}")
 
         # Select the first available stream
-        # inlet = StreamInlet(streams[0], processing_flags=pylsl.proc_clocksync)
-        inlet = StreamInlet(streams[0], processing_flags=proc_ALL)
+        inlet = StreamInlet(streams[0], processing_flags=pylsl.proc_clocksync)
+        # inlet = StreamInlet(streams[0], processing_flags=proc_ALL)
         print("\nUsing the first EMG stream...")
 
         # Get EMG channel count from the StreamInfo object
