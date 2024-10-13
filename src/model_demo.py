@@ -1,43 +1,47 @@
+import os
+import json
 import pandas as pd
 import numpy as np
 import time
-import os
 from sklearn.preprocessing import MinMaxScaler
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 
-# Define the sampling rate of your data (in Hz)
-sampling_rate = 250  # Adjust as per your data
-
-# ANSI escape codes for colored output
+# Define constants for ANSI color codes for output
 COLOR_GREEN = '\033[92m'  # Green
 COLOR_GRAY = '\033[90m'   # Gray
 COLOR_RESET = '\033[0m'   # Reset color
 
 def clear_console():
-    """
-    Clears the terminal console.
-    """
+    """Clears the terminal console."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def load_and_preprocess_data(hand_file, emg_file):
-    """
-    Loads and preprocesses the hand and EMG data.
-    """
+def load_preprocessing_data(preprocessing_file):
+    """Loads preprocessing data from a JSON file."""
+    with open(preprocessing_file, 'r') as f:
+        preprocessing_data = json.load(f)
+    return preprocessing_data
+
+def load_and_preprocess_data(hand_file, emg_file, scaler_emg, thresholds):
+    """Loads and preprocesses the hand and EMG data using provided scaling parameters."""
     # Load the data
     hand_df = pd.read_csv(hand_file)
     emg_df = pd.read_csv(emg_file)
 
     # Convert timestamps to datetime
-    hand_df['timestamp_hand'] = pd.to_datetime(hand_df['timestamp_hand'], unit='s')
+    hand_df['timestamp'] = pd.to_datetime(hand_df['timestamp'], unit='s')
     emg_df['timestamp'] = pd.to_datetime(emg_df['timestamp'], unit='s')
-
+    
+    # Filter EMG channels [1, 2, 3, 4]
+    selected_channels = ['emg_channel_1', 'emg_channel_2', 'emg_channel_3', 'emg_channel_4']
+    emg_df = emg_df[['timestamp'] + selected_channels]
+    
     # Merge on nearest timestamps
     merged_df = pd.merge_asof(
         emg_df.sort_values('timestamp'),
-        hand_df.sort_values('timestamp_hand'),
+        hand_df.sort_values('timestamp'),
         left_on='timestamp',
-        right_on='timestamp_hand',
+        right_on='timestamp',
         direction='nearest',
         tolerance=pd.Timedelta(milliseconds=20)  # Adjust tolerance if needed
     )
@@ -45,24 +49,21 @@ def load_and_preprocess_data(hand_file, emg_file):
     # Drop rows where no match was found within the tolerance
     merged_df.dropna(inplace=True)
 
-    # Define columns for normalization
+    # Define EMG and percent columns
     emg_columns = [col for col in emg_df.columns if 'emg_channel' in col]
     percent_columns = [col for col in hand_df.columns if '_percent' in col]
 
-    # Normalize EMG data
-    scaler_emg = MinMaxScaler()
-    merged_df[emg_columns] = scaler_emg.fit_transform(merged_df[emg_columns])
+    # Apply scaler to EMG data using loaded scaling parameters
+    merged_df[emg_columns] = scaler_emg.transform(merged_df[emg_columns])
 
-    # Normalize percent columns if necessary (assuming between 0 and 100)
+    # Normalize percent columns if necessary
     if merged_df[percent_columns].max().max() > 1:
         merged_df[percent_columns] = merged_df[percent_columns] / 100.0
 
     return merged_df, emg_columns, percent_columns
 
 def create_frames_for_prediction(merged_df, emg_columns, frame_size_ms, sampling_rate):
-    """
-    Creates sequences (frames) of EMG data for prediction.
-    """
+    """Creates sequences (frames) of EMG data for prediction."""
     frame_size_samples = int((frame_size_ms / 1000) * sampling_rate)
     X = merged_df[emg_columns].values
 
@@ -77,30 +78,36 @@ def create_frames_for_prediction(merged_df, emg_columns, frame_size_ms, sampling
     return np.array(X_frames), finger_percentages
 
 def main():
-    # File paths (update these if necessary)
-    hand_file = 'hand_data.csv'
-    emg_file = 'emg_data.csv'
-    model_file = 'emg_lstm_model.h5'  # Ensure this file exists
+    # File paths (update these as necessary)
+    hand_file = 'EMG Hand Data 20241013_142748/fingers.csv'  # Update with your actual file path
+    emg_file = 'EMG Hand Data 20241013_142748/emg.csv'        # Update with your actual file path
+    model_file = 'EMG_Model_20241013_142814/emg_lstm_model.keras'
+    preprocessing_file = 'EMG_Model_20241013_142814/preprocessing_info.json'  # Preprocessing JSON file
 
     # Load the saved model
     print("Loading the trained model...")
     model = load_model(model_file)
     print("Model loaded successfully.")
 
+    # Load preprocessing data
+    print("Loading preprocessing data...")
+    preprocessing_data = load_preprocessing_data(preprocessing_file)
+    scaler_emg = MinMaxScaler()
+    scaler_emg.min_ = np.array(preprocessing_data['scaler_emg_min'])
+    scaler_emg.scale_ = np.array(preprocessing_data['scaler_emg_scale'])
+    thresholds = preprocessing_data['thresholds']
+    frame_size_ms = preprocessing_data['frame_size_ms']
+    sampling_rate = preprocessing_data['sampling_rate']
+    print("Preprocessing data loaded.")
+
     # Load and preprocess data
     print("Loading and preprocessing data...")
-    merged_df, emg_columns, percent_columns = load_and_preprocess_data(hand_file, emg_file)
+    merged_df, emg_columns, percent_columns = load_and_preprocess_data(
+        hand_file, emg_file, scaler_emg, thresholds
+    )
     print("Data loaded and preprocessed.")
 
-    # Define thresholds for classification (same as used during training)
-    thresholds = {
-        'pinky_ring': 0.5,       # Threshold for pinky and ring fingers being down
-        'pointer_middle': 0.5,   # Threshold for pointer and middle fingers being down
-        'thumb': 0.5             # Threshold for thumb being open
-    }
-
     # Create frames for prediction
-    frame_size_ms = 100  # Use the same frame size as during training
     X_frames, finger_percentages = create_frames_for_prediction(
         merged_df, emg_columns, frame_size_ms, sampling_rate
     )
@@ -114,13 +121,12 @@ def main():
     # Make predictions
     print("Making predictions...")
     predictions = model.predict(X_frames, verbose=0)
-    # Binarize predictions using 0.5 threshold
     predictions_binary = (predictions > 0.5).astype(int)
     print("Predictions completed.")
 
-    # Iterate through each frame and display the data
+    # Display real-time simulation
     print("Starting real-time display...")
-    time.sleep(2)  # Brief pause before starting
+    time.sleep(2)
 
     for i in range(len(X_frames)):
         clear_console()
@@ -139,7 +145,6 @@ def main():
         thumb_pred = predictions_binary[i][2]
 
         # Convert predictions to colored dots
-        # Green dot for active (1), Gray dot for inactive (0)
         pinky_ring_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if pinky_ring_pred else f"{COLOR_GRAY}●{COLOR_RESET}"
         pointer_middle_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if pointer_middle_pred else f"{COLOR_GRAY}●{COLOR_RESET}"
         thumb_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if thumb_pred else f"{COLOR_GRAY}●{COLOR_RESET}"
@@ -156,8 +161,8 @@ def main():
         print(f"Pointer/Middle: {pointer_middle_dot}")
         print(f"Thumb:          {thumb_dot}")
 
-        # Sleep to simulate real-time (based on frame rate)
-        time.sleep(frame_size_ms / 1000.0)
+        # Sleep to simulate real-time display
+        time.sleep(10 / 1000.0)
 
     print("\nReal-time display completed.")
 

@@ -7,6 +7,8 @@ import time
 import pylsl
 from pylsl import StreamInlet, resolve_stream, proc_ALL
 import threading
+import datetime  # 1. Import datetime module
+import os
 
 class HandTracking:
     FRAME_WIDTH = 800
@@ -295,7 +297,6 @@ def collect_emg_data(inlet, emg_data_list, emg_channel_count, stop_event):
             print(f"Error in EMG data collection: {e}")
             continue
 
-
 def main():
     # Initialize hand tracker
     hand_tracker = HandTracking()
@@ -326,21 +327,9 @@ def main():
 
         # Select the first available stream
         inlet = StreamInlet(streams[0], processing_flags=pylsl.proc_clocksync)
-        # inlet = StreamInlet(streams[0], processing_flags=proc_ALL)
-        print("\nUsing the first EMG stream...")
-
-        # Get EMG channel count from the StreamInfo object
         emg_channel_count = inlet.info().channel_count()
 
-    # Create a pandas DataFrame to store data
-    fingers = ['thumb', 'index', 'middle', 'ring', 'pinky']
-    data_columns = []
-    for finger in fingers:
-        data_columns.append(finger + '_angle')
-        data_columns.append(finger + '_percent')
-    data_columns.append('timestamp_hand')
-
-    # Initialize data lists
+    # Create data lists
     emg_data_list = []
     hand_data_list = []
 
@@ -364,7 +353,7 @@ def main():
 
             # Initialize data row
             data_row = {}
-            
+
             # Update hand tracker
             try:
                 timestamp_hand = time.time()
@@ -376,27 +365,23 @@ def main():
                 timestamp_hand = np.nan
 
             # Collect hand tracking data
-            for finger in fingers:
+            for finger in hand_tracker.joint_sets.keys():
                 angle = angles.get(finger, np.nan)
                 percent = percentages.get(finger, np.nan)
                 data_row[finger + '_angle'] = angle
                 data_row[finger + '_percent'] = percent
-            data_row['timestamp_hand'] = timestamp_hand
+            data_row['timestamp'] = timestamp_hand
 
             # Append to hand data list
             hand_data_list.append(data_row)
             
-            # Every second, print the refresh rate and data table size
+            # Refresh rate and data size log
             if current_time - last_print_time >= 1.0:
                 refresh_rate = loop_count / (current_time - last_print_time)
-                hand_data_size = len(hand_data_list)
-                emg_data_size = len(emg_data_list)
-                print(f"Hand Tracking Refresh Rate: {refresh_rate:.2f} Hz, Hand Data Size: {hand_data_size}, EMG Data Size: {emg_data_size}")
-                # Reset counters
+                print(f"Hand Tracking Refresh Rate: {refresh_rate:.2f} Hz, Hand Data Size: {len(hand_data_list)}, EMG Data Size: {len(emg_data_list)}")
                 loop_count = 0
                 last_print_time = current_time
                 
-            # Break the loop if needed
             if cv2.waitKey(1) & 0xFF == 27:
                 break
     except KeyboardInterrupt:
@@ -407,12 +392,20 @@ def main():
         stop_event.set()
         if inlet:
             emg_thread.join()
-        # Save data to CSV
+        
+        # Timestamped folder name
+        now = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        folder_name = f"EMG Hand Data {now}"
+        os.makedirs(folder_name, exist_ok=True)
+
+        # Save data with unified timestamp column and simplified filenames
         hand_df = pd.DataFrame(hand_data_list)
         emg_df = pd.DataFrame(emg_data_list)
-        hand_df.to_csv('hand_data.csv', index=False)
-        emg_df.to_csv('emg_data.csv', index=False)
-        print("Data saved to 'hand_data.csv' and 'emg_data.csv'")
+
+        hand_df.to_csv(os.path.join(folder_name, 'fingers.csv'), index=False)
+        emg_df.to_csv(os.path.join(folder_name, 'emg.csv'), index=False)
+        
+        print(f"Data saved to '{folder_name}/fingers.csv' and '{folder_name}/emg.csv'")
 
 if __name__ == "__main__":
     main()

@@ -15,29 +15,39 @@ def load_and_preprocess_data(hand_file, emg_file, start_cutoff=2):
     hand_df['timestamp_hand'] = pd.to_datetime(hand_df['timestamp_hand'], unit='s')
     emg_df['timestamp'] = pd.to_datetime(emg_df['timestamp'], unit='s')
 
+    # Filter EMG channels [1, 2, 3, 4] 
+    selected_channels = ['emg_channel_1', 'emg_channel_2', 'emg_channel_3', 'emg_channel_4']
+    emg_df = emg_df[['timestamp'] + selected_channels]
+
     # Merge on nearest timestamps
-    merged_df = pd.merge_asof(emg_df.sort_values('timestamp'), hand_df.sort_values('timestamp_hand'),
-                              left_on='timestamp', right_on='timestamp_hand', direction='nearest')
+    merged_df = pd.merge_asof(
+        emg_df.sort_values('timestamp'),
+        hand_df.sort_values('timestamp_hand'),
+        left_on='timestamp',
+        right_on='timestamp_hand',
+        direction='nearest',
+        tolerance=pd.Timedelta(milliseconds=20)  # Adjust tolerance if needed
+    )
+
+    # Drop rows where no match was found within the tolerance
     merged_df.dropna(inplace=True)
 
     # Filter out initial seconds
     merged_df['elapsed_seconds'] = (merged_df['timestamp'] - merged_df['timestamp'].iloc[0]).dt.total_seconds()
     merged_df = merged_df[merged_df['elapsed_seconds'] >= start_cutoff].drop(
-        columns=['timestamp', 'timestamp_hand', 'elapsed_seconds'])
-
-    # Define columns for normalization
-    emg_columns = [f'emg_channel_{i}' for i in [1, 2, 3, 4]]
-    percent_columns = [col for col in merged_df.columns if '_percent' in col]
+        columns=['timestamp', 'timestamp_hand', 'elapsed_seconds']
+    )
 
     # Normalize EMG data
     scaler_emg = MinMaxScaler()
-    merged_df[emg_columns] = scaler_emg.fit_transform(merged_df[emg_columns])
+    merged_df[selected_channels] = scaler_emg.fit_transform(merged_df[selected_channels])
 
-    # Normalize Percentage data (0-100 already, so just scale)
-    scaler_percentages = MinMaxScaler(feature_range=(0, 1))
-    merged_df[percent_columns] = scaler_percentages.fit_transform(merged_df[percent_columns])
+    # Normalize percent columns if needed
+    percent_columns = [col for col in hand_df.columns if '_percent' in col]
+    if merged_df[percent_columns].max().max() > 1:
+        merged_df[percent_columns] = merged_df[percent_columns] / 100.0
 
-    return merged_df, emg_columns, percent_columns
+    return merged_df, selected_channels, percent_columns
 
 # Function to create time frames for binary classification (open/closed)
 def create_binary_frames(merged_df, emg_columns, percent_columns, frame_size_ms, sampling_rate, threshold=0.5):

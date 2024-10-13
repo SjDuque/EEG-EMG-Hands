@@ -1,3 +1,5 @@
+import os
+import json
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -5,8 +7,8 @@ from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Input
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
+import datetime
 
 # Define the sampling rate of your data (in Hz)
 sampling_rate = 250  # Adjust as per your data
@@ -18,17 +20,21 @@ def load_and_preprocess_data(hand_file, emg_file, start_cutoff=2):
     emg_df = pd.read_csv(emg_file)
 
     # Convert timestamps to datetime
-    hand_df['timestamp_hand'] = pd.to_datetime(hand_df['timestamp_hand'], unit='s')
+    hand_df['timestamp'] = pd.to_datetime(hand_df['timestamp'], unit='s')
     emg_df['timestamp'] = pd.to_datetime(emg_df['timestamp'], unit='s')
+
+    # Filter EMG channels [1, 2, 3, 4]
+    selected_channels = ['emg_channel_1', 'emg_channel_2', 'emg_channel_3', 'emg_channel_4']
+    emg_df = emg_df[['timestamp'] + selected_channels]
 
     # Merge on nearest timestamps
     merged_df = pd.merge_asof(
         emg_df.sort_values('timestamp'),
-        hand_df.sort_values('timestamp_hand'),
+        hand_df.sort_values('timestamp'),
         left_on='timestamp',
-        right_on='timestamp_hand',
+        right_on='timestamp',
         direction='nearest',
-        tolerance=pd.Timedelta(milliseconds=20)  # Adjust tolerance if needed
+        tolerance=pd.Timedelta(milliseconds=20)
     )
 
     # Drop rows where no match was found within the tolerance
@@ -37,25 +43,21 @@ def load_and_preprocess_data(hand_file, emg_file, start_cutoff=2):
     # Filter out initial seconds
     merged_df['elapsed_seconds'] = (merged_df['timestamp'] - merged_df['timestamp'].iloc[0]).dt.total_seconds()
     merged_df = merged_df[merged_df['elapsed_seconds'] >= start_cutoff].drop(
-        columns=['timestamp', 'timestamp_hand', 'elapsed_seconds']
+        columns=['timestamp', 'elapsed_seconds']
     )
-
-    # Define columns for normalization
-    emg_columns = [col for col in emg_df.columns if 'emg_channel' in col]
-    percent_columns = [col for col in hand_df.columns if '_percent' in col]
 
     # Normalize EMG data
     scaler_emg = MinMaxScaler()
-    merged_df[emg_columns] = scaler_emg.fit_transform(merged_df[emg_columns])
+    merged_df[selected_channels] = scaler_emg.fit_transform(merged_df[selected_channels])
 
-    # Percent columns are already between 0 and 1 (assuming they are normalized between 0 and 1)
-    # If they are between 0 and 100, normalize them to 0-1
+    # Normalize percent columns if needed
+    percent_columns = [col for col in hand_df.columns if '_percent' in col]
     if merged_df[percent_columns].max().max() > 1:
         merged_df[percent_columns] = merged_df[percent_columns] / 100.0
 
-    return merged_df, emg_columns, percent_columns
+    return merged_df, selected_channels, percent_columns, scaler_emg
 
-# Function to create time frames for 3-label binary classification (pinky/ring, pointer/middle, thumb)
+# Function to create time frames for 3-label binary classification
 def create_aggregated_binary_frames(
     merged_df, emg_columns, percent_columns, frame_size_ms, sampling_rate, thresholds
 ):
@@ -66,16 +68,15 @@ def create_aggregated_binary_frames(
     # Apply thresholds to create binary labels
     pinky_ring = (merged_df[['pinky_percent', 'ring_percent']].mean(axis=1) < thresholds['pinky_ring']).astype(int)
     pointer_middle = (merged_df[['index_percent', 'middle_percent']].mean(axis=1) < thresholds['pointer_middle']).astype(int)
-    thumb = (merged_df['thumb_percent'] > thresholds['thumb']).astype(int)
+    thumb = (merged_df['thumb_percent'] < thresholds['thumb']).astype(int)
 
-    # Stack the three groups into a single array
     y = np.vstack([pinky_ring, pointer_middle, thumb]).T
 
     # Create sequences
     X_frames, y_frames = [], []
     for i in range(len(X) - frame_size_samples + 1):
         X_frames.append(X[i:i + frame_size_samples])
-        y_frames.append(y[i + frame_size_samples - 1])  # Use the last label in the frame
+        y_frames.append(y[i + frame_size_samples - 1])
 
     return np.array(X_frames), np.array(y_frames)
 
@@ -105,15 +106,15 @@ def create_lstm_model(input_shape, output_shape):
 
 # Main function to execute the workflow
 def main():
-    hand_file = 'hand_data.csv'  # Update with your actual file name
-    emg_file = 'emg_data.csv'    # Update with your actual file name
-    merged_df, emg_columns, percent_columns = load_and_preprocess_data(hand_file, emg_file)
+    hand_file = 'EMG Hand Data 20241013_145704/fingers.csv'  # Update with your actual file path
+    emg_file = 'EMG Hand Data 20241013_145704/emg.csv'        # Update with your actual file path
+    merged_df, emg_columns, percent_columns, scaler_emg = load_and_preprocess_data(hand_file, emg_file)
 
     # Define thresholds for classification
     thresholds = {
-        'pinky_ring': 0.5,       # Threshold for pinky and ring fingers being down
-        'pointer_middle': 0.5,   # Threshold for pointer and middle fingers being down
-        'thumb': 0.5             # Threshold for thumb being open
+        'pinky_ring': 0.5,
+        'pointer_middle': 0.5,
+        'thumb': 0.5
     }
 
     # Create aggregated binary frames dataset for a 100ms frame size
@@ -140,6 +141,22 @@ def main():
     early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
+    # Create a folder with a timestamp for saving model and preprocessing details
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    folder_name = f'EMG_Model_{timestamp}'
+    os.makedirs(folder_name, exist_ok=True)
+
+    # Save preprocessing details in a JSON file
+    preprocessing_info = {
+        'thresholds': thresholds,
+        'frame_size_ms': 100,
+        'sampling_rate': sampling_rate,
+        'scaler_emg_min': scaler_emg.min_.tolist(),
+        'scaler_emg_scale': scaler_emg.scale_.tolist()
+    }
+    with open(os.path.join(folder_name, 'preprocessing_info.json'), 'w') as f:
+        json.dump(preprocessing_info, f)
+
     # Train the model
     history = model.fit(
         X_train, y_train,
@@ -155,8 +172,8 @@ def main():
     print(f"Test Precision: {test_precision * 100:.2f}%")
     print(f"Test Recall: {test_recall * 100:.2f}%")
 
-    # If needed, save the model
-    model.save('emg_lstm_model.keras')
+    # Save the trained model in the folder
+    model.save(os.path.join(folder_name, 'emg_lstm_model.keras'))
 
 if __name__ == "__main__":
     main()
