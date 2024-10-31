@@ -1,7 +1,18 @@
-# data_loader.py
+import cv2
+import pandas as pd
+import numpy as np
 import os
 import glob
-import pandas as pd
+import time
+from collections import deque
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+import mediapipe as mp
+import bisect
+
+# =======================
+# Data Loading Module
+# =======================
 
 def load_video_frames(frames_folder):
     """
@@ -56,20 +67,18 @@ def load_finger_angles(finger_csv):
     df['timestamp'] = df['timestamp'].astype(float)
     return df
 
-# visualizer.py
-import matplotlib.pyplot as plt
-import numpy as np
-from collections import deque
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-import cv2
+# =======================
+# Visualization Module
+# =======================
 
-def create_emg_plots(emg_window_data, channel_names, plot_height=200, plot_width=400):
+def create_emg_plots(emg_window_data, channel_names, closest_emg, plot_height=200, plot_width=400):
     """
     Create separate matplotlib plots for each EMG channel without axes and concatenate them vertically.
     
     Parameters:
         emg_window_data (pd.DataFrame): EMG data within the window.
         channel_names (list): List of EMG channel names to plot.
+        closest_emg (pd.Series): The EMG data row closest to the current timestamp.
         plot_height (int): Height of each plot in pixels.
         plot_width (int): Width of each plot in pixels.
         
@@ -84,6 +93,9 @@ def create_emg_plots(emg_window_data, channel_names, plot_height=200, plot_width
     
     for ax, channel in zip(axes, channel_names):
         ax.plot(emg_window_data['timestamp'], emg_window_data[channel], color='blue', linewidth=1.5)
+        # Highlight the closest EMG data point
+        if not pd.isna(closest_emg[channel]):
+            ax.scatter(closest_emg['timestamp'], closest_emg[channel], color='red', zorder=5)
         ax.set_yticks([])
         ax.set_xticks([])
         ax.axis('off')  # Remove axes
@@ -124,7 +136,7 @@ def create_finger_angles_display(finger_angles, finger_names, display_size=(400,
     # Annotate bars with angle values
     for bar, angle in zip(bars, angles):
         height = bar.get_height()
-        if not np.isnan(angle):
+        if not pd.isna(angle):
             ax.text(bar.get_x() + bar.get_width() / 2, height + 2, f"{angle:.1f}°", ha='center', va='bottom', fontsize=8)
         else:
             ax.text(bar.get_x() + bar.get_width() / 2, 0, "N/A", ha='center', va='bottom', fontsize=8)
@@ -143,9 +155,9 @@ def create_finger_angles_display(finger_angles, finger_names, display_size=(400,
     plt.close(fig)
     return angles_img
 
-# hand_landmark.py
-import mediapipe as mp
-import cv2
+# =======================
+# Hand Landmark Module
+# =======================
 
 def initialize_hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5):
     """
@@ -153,7 +165,8 @@ def initialize_hands(static_image_mode=True, max_num_hands=1, min_detection_conf
     
     Returns:
         hands: MediaPipe Hands object
-        drawing_utils: MediaPipe Drawing Utilities
+        mp_hands: MediaPipe hands module
+        mp_drawing: MediaPipe drawing module
     """
     mp_hands = mp.solutions.hands
     mp_drawing = mp.solutions.drawing_utils
@@ -183,11 +196,9 @@ def draw_hand_landmarks(image, landmarks, mp_hands, mp_drawing):
                 mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2))
     return image
 
-# playback.py
-import cv2
-import time
-import numpy as np
-from collections import deque
+# =======================
+# Playback Controller
+# =======================
 
 class PlaybackController:
     def __init__(self, frames, emg_df, finger_df, emg_window_size_ms=500, playback_speed=1.0, emg_channels=None):
@@ -208,93 +219,117 @@ class PlaybackController:
         self.emg_window_size_s = emg_window_size_ms / 1000.0
         self.playback_speed = playback_speed
         self.emg_channels = emg_channels if emg_channels else [col for col in emg_df.columns if col.startswith('emg_channel_')]
-        self.emg_buffer = deque()
-        self.emg_ptr = 0
-        self.finger_ptr = 0
-        self.num_emg_samples = len(emg_df)
         self.finger_names = list(finger_df.columns[1:])  # Exclude timestamp
 
-    def update_emg_buffer(self, frame_timestamp):
+        # Precompute EMG timestamps for binary search
+        self.emg_timestamps = self.emg_df['timestamp'].tolist()
+        self.finger_timestamps = self.finger_df['timestamp'].tolist()
+        self.frame_timestamps = [frame[0] for frame in self.frames]
+
+    def get_closest_emg_data(self, target_timestamp):
         """
-        Update the EMG buffer with data up to the current frame timestamp.
+        Retrieve the EMG data closest to the target timestamp using binary search.
         
         Parameters:
-            frame_timestamp (float): Timestamp of the current frame
-        """
-        while self.emg_ptr < self.num_emg_samples and self.emg_df.iloc[self.emg_ptr]['timestamp'] <= frame_timestamp:
-            self.emg_buffer.append(self.emg_df.iloc[self.emg_ptr])
-            self.emg_ptr += 1
-        
-        # Remove EMG samples outside the window
-        while self.emg_buffer and self.emg_buffer[0]['timestamp'] < (frame_timestamp - self.emg_window_size_s):
-            self.emg_buffer.popleft()
-
-    def get_emg_window(self):
-        """
-        Get the current EMG window as a DataFrame.
-        
-        Returns:
-            pd.DataFrame: EMG data within the window
-        """
-        return pd.DataFrame(list(self.emg_buffer))
-
-    def get_finger_angles(self, frame_timestamp):
-        """
-        Get the finger angles closest to the current frame timestamp.
-        
-        Parameters:
-            frame_timestamp (float): Timestamp of the current frame
+            target_timestamp (float): The target timestamp to match.
             
         Returns:
-            dict: Finger angles
+            pd.Series: The EMG data row closest to the target timestamp.
         """
-        while self.finger_ptr + 1 < len(self.finger_df) and self.finger_df.iloc[self.finger_ptr + 1]['timestamp'] <= frame_timestamp:
-            self.finger_ptr += 1
-        if self.finger_ptr < len(self.finger_df):
-            return self.finger_df.iloc[self.finger_ptr].to_dict()
+        if len(self.emg_timestamps) == 0:
+            return pd.Series({col: np.nan for col in self.emg_df.columns})
+
+        idx = bisect.bisect_left(self.emg_timestamps, target_timestamp)
+        if idx == 0:
+            closest_idx = 0
+        elif idx == len(self.emg_timestamps):
+            closest_idx = len(self.emg_timestamps) - 1
         else:
+            before = self.emg_timestamps[idx - 1]
+            after = self.emg_timestamps[idx]
+            if abs(after - target_timestamp) < abs(before - target_timestamp):
+                closest_idx = idx
+            else:
+                closest_idx = idx - 1
+        return self.emg_df.iloc[closest_idx]
+
+    def get_emg_window(self, target_timestamp):
+        """
+        Retrieve a window of EMG data around the target timestamp.
+        
+        Parameters:
+            target_timestamp (float): The center timestamp for the window.
+            
+        Returns:
+            pd.DataFrame: EMG data within the specified window.
+        """
+        window_start = target_timestamp - self.emg_window_size_s / 2
+        window_end = target_timestamp + self.emg_window_size_s / 2
+        window_df = self.emg_df[(self.emg_df['timestamp'] >= window_start) & (self.emg_df['timestamp'] <= window_end)]
+        return window_df
+
+    def get_closest_finger_angles(self, target_timestamp):
+        """
+        Retrieve the finger angles closest to the target timestamp using binary search.
+        
+        Parameters:
+            target_timestamp (float): The target timestamp to match.
+            
+        Returns:
+            dict: Finger angles closest to the target timestamp.
+        """
+        if len(self.finger_timestamps) == 0:
             return {col: np.nan for col in self.finger_df.columns}
+        
+        idx = bisect.bisect_left(self.finger_timestamps, target_timestamp)
+        if idx == 0:
+            closest_idx = 0
+        elif idx == len(self.finger_timestamps):
+            closest_idx = len(self.finger_timestamps) - 1
+        else:
+            before = self.finger_timestamps[idx - 1]
+            after = self.finger_timestamps[idx]
+            if abs(after - target_timestamp) < abs(before - target_timestamp):
+                closest_idx = idx
+            else:
+                closest_idx = idx - 1
+        return self.finger_df.iloc[closest_idx].to_dict()
 
     def get_closest_frame_index(self, target_timestamp):
         """
-        Get the index of the frame closest to the target timestamp.
+        Get the index of the frame closest to the target timestamp using binary search.
         
         Parameters:
-            target_timestamp (float): The target timestamp to match
+            target_timestamp (float): The target timestamp to match.
             
         Returns:
-            int: Index of the closest frame
+            int: Index of the closest frame.
         """
-        # Binary search for efficiency
-        left, right = 0, len(self.frames) - 1
-        best_idx = left
-        min_diff = abs(self.frames[left][0] - target_timestamp)
-        while left <= right:
-            mid = (left + right) // 2
-            diff = abs(self.frames[mid][0] - target_timestamp)
-            if diff < min_diff:
-                min_diff = diff
-                best_idx = mid
-            if self.frames[mid][0] < target_timestamp:
-                left = mid + 1
-            elif self.frames[mid][0] > target_timestamp:
-                right = mid - 1
-            else:
-                break
-        return best_idx
+        if len(self.frame_timestamps) == 0:
+            return -1
 
-# main.py
-import cv2
-import time
-# from data_loader import load_video_frames, load_emg_data, load_finger_angles
-# from visualizer import create_emg_plots, create_finger_angles_display
-# from hand_landmark import initialize_hands, draw_hand_landmarks
-# from playback import PlaybackController
+        idx = bisect.bisect_left(self.frame_timestamps, target_timestamp)
+        if idx == 0:
+            closest_idx = 0
+        elif idx == len(self.frame_timestamps):
+            closest_idx = len(self.frame_timestamps) - 1
+        else:
+            before = self.frame_timestamps[idx - 1]
+            after = self.frame_timestamps[idx]
+            if abs(after - target_timestamp) < abs(before - target_timestamp):
+                closest_idx = idx
+            else:
+                closest_idx = idx - 1
+        return closest_idx
+
+# =======================
+# Main Playback Function
+# =======================
 
 def main():
     data_folder = "EMG Hand Data 20241031_002827"
     emg_window_size_ms = 500
-    playback_speed = 2.0  # Adjust as needed (e.g., 1.0 for real-time)
+    playback_speed = 1.0  # Adjust as needed (e.g., 1.0 for real-time)
     emg_channels_to_display = None  # Set to an integer or list if specific channels are needed
 
     # Validate playback_speed
@@ -364,7 +399,7 @@ def main():
 
     # Create a named window for display
     cv2.namedWindow('Replay', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Replay', 1200, 800)  # Initial window size, can be adjusted
+    cv2.resizeWindow('Replay', 1600, 900)  # Adjusted window size for better layout
 
     # Initialize playback timing
     num_frames = len(frames)
@@ -373,15 +408,21 @@ def main():
     playback_start_timestamp = frames[0][0]
 
     while current_frame_idx < num_frames:
-        frame_timestamp, frame_path = frames[current_frame_idx]
-        elapsed_playback_time = (time.perf_counter() - playback_start_time) * playback_speed
-        target_timestamp = playback_start_timestamp + elapsed_playback_time
+        # Calculate the elapsed playback time adjusted by playback_speed
+        elapsed_real_time = (time.perf_counter() - playback_start_time) * playback_speed
+        target_timestamp = playback_start_timestamp + elapsed_real_time
 
         # Get the closest frame index based on the current playback time
         closest_frame_idx = playback.get_closest_frame_index(target_timestamp)
+        if closest_frame_idx == -1:
+            print("No frames available.")
+            break
+
+        # Avoid processing the same frame repeatedly
         if closest_frame_idx != current_frame_idx:
             current_frame_idx = closest_frame_idx
-            frame_timestamp, frame_path = frames[current_frame_idx]
+
+        frame_timestamp, frame_path = frames[current_frame_idx]
 
         # Load the frame image
         frame = cv2.imread(frame_path)
@@ -399,18 +440,18 @@ def main():
         # Draw hand landmarks on the frame
         frame = draw_hand_landmarks(frame, results.multi_hand_landmarks, mp_hands, mp_drawing)
 
-        # Update EMG buffer
-        playback.update_emg_buffer(frame_timestamp)
+        # Get EMG data closest to the current frame timestamp
+        closest_emg = playback.get_closest_emg_data(frame_timestamp)
 
-        # Get EMG window
-        emg_window_df = playback.get_emg_window()
+        # Get EMG window for plotting
+        emg_window_df = playback.get_emg_window(frame_timestamp)
 
         # Get finger angles for the current frame
-        finger_angles = playback.get_finger_angles(frame_timestamp)
+        finger_angles = playback.get_closest_finger_angles(frame_timestamp)
 
-        # Create EMG plots
+        # Create EMG plots with highlighted closest data point
         if not emg_window_df.empty:
-            emg_plot_img = create_emg_plots(emg_window_df, playback.emg_channels, plot_height=200, plot_width=400)
+            emg_plot_img = create_emg_plots(emg_window_df, playback.emg_channels, closest_emg, plot_height=200, plot_width=400)
         else:
             # Create a blank image if there's no EMG data
             emg_plot_img = np.zeros((200, 400, 3), dtype=np.uint8)
@@ -449,6 +490,10 @@ def main():
     hands.close()
     cv2.destroyAllWindows()
     print("Replay finished.")
+
+# =======================
+# Entry Point
+# =======================
 
 if __name__ == "__main__":
     main()
