@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
@@ -10,19 +10,35 @@ from tensorflow.keras.callbacks import EarlyStopping
 import logging
 import matplotlib.pyplot as plt
 import tensorflow as tf
+import joblib
+import os
+
+def save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir):
+    """
+    Save the trained model, preprocessing scaler, and EMG normalization parameters to disk.
+    """
+    # Create the directory if it doesn't exist
+    os.makedirs(model_dir, exist_ok=True)
+    # Save the model
+    model.save(os.path.join(model_dir, 'model.keras'))
+    # Save the feature scaler
+    joblib.dump(scaler, os.path.join(model_dir, 'feature_scaler.joblib'))
+    # Save the EMG normalization parameters
+    joblib.dump({'means': emg_means, 'stds': emg_stds}, os.path.join(model_dir, 'emg_normalization_params.joblib'))
+    logging.info(f"Model and preprocessing saved to directory {model_dir}.")
 
 # Configuration Parameters
 SAMPLING_RATE = 250  # in Hz
-SELECTED_CHANNELS = [1, 2, 3, 4, 5]  # EMG channels to use
-FRAME_SIZES = [1, 2, 4, 8, 16, 32, 64, 128]  # Frame sizes in samples
+SELECTED_CHANNELS = [1, 2, 3, 4, 5, 6, 7, 8]  # EMG channels to use
+FRAME_SIZES = [1, 2, 4, 8, 16, 32, 48, 64]  # Frame sizes in samples
 
 # Thresholds for determining if a finger is closed (midpoints)
 JOINT_ANGLE_THRESHOLDS = {
-    'thumb': (132.5 + 157.5) / 2,   # 145.0
-    'index': (25 + 165) / 2,        # 95.0
-    'middle': (15 + 167.5) / 2,     # 91.25
-    'ring': (15 + 167.5) / 2,       # 91.25
-    'pinky': (15 + 167.5) / 2       # 91.25
+    'thumb':    (132.5  + 157.5)    / 2,    # (132.5 + 157.5) / 2
+    'index':    (60     + 160)      / 2,     # (25 + 165) / 2
+    'middle':   (40     + 167.5)    / 2,   # (15 + 167.5) / 2
+    'ring':     (30     + 167.5)    / 2,     # (15 + 167.5) / 2
+    'pinky':    (30     + 167.5)    / 2   # (15 + 167.5) / 2
 }
 
 # Set up logging
@@ -61,36 +77,39 @@ def extract_emg_features(emg_data, frame_size_samples):
 
 def create_labels(fingers_angles_df):
     """
-    Create binary labels indicating whether each finger is closed.
+    Create binary labels indicating whether each finger group is closed.
     """
     labels = []
     for _, row in fingers_angles_df.iterrows():
-        label = [
-            int(row['thumb_angle'] < JOINT_ANGLE_THRESHOLDS['thumb']),
-            int(row['index_angle'] < JOINT_ANGLE_THRESHOLDS['index']),
-            int(row['middle_angle'] < JOINT_ANGLE_THRESHOLDS['middle']),
-            int(row['ring_angle'] < JOINT_ANGLE_THRESHOLDS['ring']),
-            int(row['pinky_angle'] < JOINT_ANGLE_THRESHOLDS['pinky'])
-        ]
+        thumb_label = int(row['THUMB'] < JOINT_ANGLE_THRESHOLDS['thumb'])
+        # Group Index and Middle fingers
+        index_middle_label = int(
+            (row['INDEX'] < JOINT_ANGLE_THRESHOLDS['index']) or
+            (row['MIDDLE'] < JOINT_ANGLE_THRESHOLDS['middle'])
+        )
+        # Group Ring and Pinky fingers
+        ring_pinky_label = int(
+            (row['RING'] < JOINT_ANGLE_THRESHOLDS['ring']) or
+            (row['PINKY'] < JOINT_ANGLE_THRESHOLDS['pinky'])
+        )
+        label = [thumb_label, index_middle_label, ring_pinky_label]
         labels.append(label)
     return np.array(labels)
 
 def print_label_distribution(y, label='Overall'):
     """
-    Print the distribution of labels for each finger.
+    Print the distribution of labels for each finger group.
     """
     total_samples = y.shape[0]
     label_sums = np.sum(y, axis=0)
     label_counts = {
         'Thumb': label_sums[0],
-        'Index': label_sums[1],
-        'Middle': label_sums[2],
-        'Ring': label_sums[3],
-        'Pinky': label_sums[4]
+        'Index_Middle': label_sums[1],
+        'Ring_Pinky': label_sums[2]
     }
     print(f"\nLabel distribution ({label}):")
-    for finger, count in label_counts.items():
-        print(f"{finger}: {count}/{total_samples} ({(count / total_samples) * 100:.2f}%)")
+    for finger_group, count in label_counts.items():
+        print(f"{finger_group}: {count}/{total_samples} ({(count / total_samples) * 100:.2f}%)")
 
 def build_model(input_dim, output_dim):
     """
@@ -143,8 +162,8 @@ def plot_learning_curves(history):
 
 def main():
     # File paths
-    emg_file = 'emg_session_0/emg.csv'
-    fingers_file = 'emg_session_0/fingers.csv'
+    emg_file = 'EMG Hand Data 20241031_002827/emg.csv'
+    fingers_file = 'EMG Hand Data 20241031_002827/finger_angles.csv'
 
     # Load EMG data
     try:
@@ -162,7 +181,7 @@ def main():
         return
 
     # Check for required columns in finger data
-    expected_finger_columns = ['thumb_angle', 'index_angle', 'middle_angle', 'ring_angle', 'pinky_angle', 'timestamp']
+    expected_finger_columns = ['timestamp', 'THUMB', 'INDEX', 'MIDDLE', 'RING', 'PINKY']  # Corrected 'PINKY' instead of duplicate 'THUMB'
     if not all(col in fingers_df.columns for col in expected_finger_columns):
         logging.error("Finger data file is missing required columns.")
         return
@@ -171,9 +190,13 @@ def main():
     fingers_df.dropna(subset=expected_finger_columns, inplace=True)
     emg_df.dropna(subset=expected_emg_columns, inplace=True)
 
-    # Normalize EMG data per channel
+    # Compute means and stds per channel for normalization
     emg_channels = [f'emg_channel_{ch}' for ch in SELECTED_CHANNELS]
-    emg_df[emg_channels] = emg_df[emg_channels].apply(lambda x: (x - x.mean()) / x.std(), axis=0)
+    emg_means = emg_df[emg_channels].mean()
+    emg_stds = emg_df[emg_channels].std()
+    
+    # Normalize EMG data per channel using training data stats
+    emg_df[emg_channels] = (emg_df[emg_channels] - emg_means) / emg_stds
     logging.info("EMG data normalized.")
 
     # Extract EMG channels and timestamps
@@ -183,7 +206,7 @@ def main():
 
     # Extract finger timestamps and angles
     fingers_timestamps = fingers_df['timestamp'].values
-    fingers_angles = fingers_df[['thumb_angle', 'index_angle', 'middle_angle', 'ring_angle', 'pinky_angle']]
+    fingers_angles = fingers_df[expected_finger_columns[1:]]  # ['THUMB', 'INDEX', 'MIDDLE', 'RING', 'PINKY']
     logging.info("Finger data extracted.")
 
     # Initialize feature list and collect corresponding finger angles
@@ -249,16 +272,22 @@ def main():
     print_label_distribution(y_train, label='Training Set')
     print_label_distribution(y_test, label='Test Set')
 
-    # Compute class weights for each finger to handle class imbalance
+    # Compute class weights for each finger group to handle class imbalance
     class_weights = {}
-    for i, finger in enumerate(['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']):
-        class_weights[i] = compute_class_weight(
-            class_weight='balanced',
-            classes=np.unique(y_train[:, i]),
-            y=y_train[:, i]
-        )
-    # Convert class weights to a dict for multi-output
-    class_weight_dict = {i: dict(enumerate(class_weights[i])) for i in range(y.shape[1])}
+    for i, finger_group in enumerate(['Thumb', 'Index_Middle', 'Ring_Pinky']):
+        classes = np.unique(y_train[:, i])
+        if len(classes) > 1:
+            cw = compute_class_weight(
+                class_weight='balanced',
+                classes=classes,
+                y=y_train[:, i]
+            )
+            class_weights[i] = dict(zip(classes, cw))
+        else:
+            # If only one class present, assign weight 1
+            class_weights[i] = {classes[0]: 1.0}
+    logging.info(f"Computed class weights: {class_weights}")
+    # Note: Keras does not directly support class weights for multi-output. You might need to handle this manually or adjust the loss function accordingly.
 
     # Build the model
     input_dim = X_train.shape[1]
@@ -268,6 +297,7 @@ def main():
 
     # Define callbacks
     early_stopping = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
     # Train the model
     history = model.fit(
@@ -275,7 +305,7 @@ def main():
         epochs=200,
         batch_size=64,
         validation_split=0.2,
-        callbacks=[early_stopping],
+        callbacks=[early_stopping, reduce_lr],
         verbose=1
     )
     logging.info("Model training completed.")
@@ -296,18 +326,21 @@ def main():
     print("\nClassification Report:")
     print(classification_report(
         y_test, y_pred,
-        target_names=['Thumb', 'Index', 'Middle', 'Ring', 'Pinky'],
+        target_names=['Thumb', 'Index_Middle', 'Ring_Pinky'],
         zero_division=0
     ))
 
     # Print confusion matrix for each class
-    for i, finger in enumerate(['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']):
-        print(f"\nConfusion Matrix for {finger}:")
+    for i, finger_group in enumerate(['Thumb', 'Index_Middle', 'Ring_Pinky']):
+        print(f"\nConfusion Matrix for {finger_group}:")
         cm = confusion_matrix(y_test[:, i], y_pred[:, i])
         print(cm)
         
-    # Save the model
-    model.save('simple_emg_model.keras')
+    # Save the model and preprocessing 
+    # Use timestamp to differentiate between models
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    model_dir = f'model_{timestamp}'
+    save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir)
 
 if __name__ == "__main__":
     main()
