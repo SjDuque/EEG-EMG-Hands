@@ -1,24 +1,30 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, Input, BatchNormalization
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import logging
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import joblib
 import os
 
-def save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir):
+def save_model_and_preprocessing(model, scaler, model_dir):
+    """
+    Saves the trained model and the scaler to the specified directory.
+
+    Parameters:
+    - model: Trained Keras model.
+    - scaler: Fitted StandardScaler object.
+    - model_dir: Directory path to save the model and scaler.
+    """
     os.makedirs(model_dir, exist_ok=True)
     model.save(os.path.join(model_dir, 'model.keras'))
     joblib.dump(scaler, os.path.join(model_dir, 'feature_scaler.joblib'))
-    joblib.dump({'means': emg_means, 'stds': emg_stds}, os.path.join(model_dir, 'emg_normalization_params.joblib'))
-    logging.info(f"Model and preprocessing saved to directory {model_dir}.")
+    logging.info(f"Model and scaler saved to directory {model_dir}.")
 
 # Configuration Parameters
 SAMPLING_RATE = 250
@@ -44,17 +50,27 @@ JOINT_ANGLE_THRESHOLDS = {
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def find_nearest_previous_timestamp(emg_timestamps, target_timestamp):
+    """
+    Finds the index of the nearest EMG timestamp that is less than or equal to the target timestamp.
+
+    Parameters:
+    - emg_timestamps: Numpy array of EMG timestamps.
+    - target_timestamp: The target timestamp to find the nearest previous EMG timestamp for.
+
+    Returns:
+    - Index of the nearest previous timestamp or None if not found.
+    """
     idx = np.searchsorted(emg_timestamps, target_timestamp, side='right') - 1
     return idx if idx >= 0 else None
 
 def extract_emg_features(emg_data, frame_size_samples):
     """
-    Vectorized feature extraction.
-    
+    Vectorized feature extraction from EMG data.
+
     Parameters:
     - emg_data: numpy array of shape (num_samples, num_channels)
     - frame_size_samples: Number of samples in each frame
-    
+
     Returns:
     - features: A 1D numpy array of features per frame.
     """
@@ -87,12 +103,12 @@ def extract_emg_features(emg_data, frame_size_samples):
 def create_labels(fingers_angles_df, finger_groups, thresholds):
     """
     Vectorized creation of binary labels indicating whether each finger group is closed for each sample.
-    
+
     Parameters:
     - fingers_angles_df: DataFrame with finger angles for each sample.
     - finger_groups: Dict mapping group names to list of fingers.
     - thresholds: Dict mapping individual fingers to their threshold.
-    
+
     Returns:
     - labels: numpy array with binary labels per group for each sample.
     - group_names: List of group names in the order of labels.
@@ -111,11 +127,10 @@ def create_labels(fingers_angles_df, finger_groups, thresholds):
 
     return labels, group_names
 
-
 def print_label_distribution(y, group_names, label='Overall'):
     """
     Print the distribution of labels for each finger group.
-    
+
     Parameters:
     - y: numpy array with binary labels per group for each sample.
     - group_names: List of group names corresponding to the labels.
@@ -130,17 +145,22 @@ def print_label_distribution(y, group_names, label='Overall'):
         print(f"{finger_group}: {count}/{total_samples} ({percentage:.2f}%)")
 
 def build_model(input_dim, output_dim):
+    """
+    Builds and compiles the neural network model.
+
+    Parameters:
+    - input_dim: Number of input features.
+    - output_dim: Number of output classes.
+
+    Returns:
+    - Compiled Keras model.
+    """
     model = Sequential([
         Input(shape=(input_dim,)),
-        Dense(256, activation='relu'),
-        BatchNormalization(),
-        Dropout(0.5),
         Dense(128, activation='relu'),
-        BatchNormalization(),
-        Dropout(0.5),
+        Dropout(0.3),
         Dense(64, activation='relu'),
-        BatchNormalization(),
-        Dropout(0.5),
+        Dropout(0.3),
         Dense(output_dim, activation='sigmoid')
     ])
     model.compile(optimizer='adam',
@@ -149,6 +169,12 @@ def build_model(input_dim, output_dim):
     return model
 
 def plot_learning_curves(history):
+    """
+    Plots the learning curves for accuracy and loss.
+
+    Parameters:
+    - history: Keras History object from model training.
+    """
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.plot(history.history['binary_accuracy'], label='Train Binary Accuracy')
@@ -167,45 +193,32 @@ def plot_learning_curves(history):
     plt.tight_layout()
     plt.show()
 
-def main():
-    session_dirs = [
-        'EMG Hand Data 20241030_223524',
-        'EMG Hand Data 20241030_224059',
-        'EMG Hand Data 20241030_224413',
-        'EMG Hand Data 20241030_232021',
-        'EMG Hand Data 20241030_233323',
-        'EMG Hand Data 20241030_234704',
-        'EMG Hand Data 20241030_235851',
-        'EMG Hand Data 20241031_001704',
-        'EMG Hand Data 20241031_002827',
-        # Add more session directories as needed
-    ]
+def process_sessions(session_dirs, emg_means=None, emg_stds=None, use_existing_scaler=False):
+    """
+    Process EMG and finger angle data from session directories.
 
-    test_session_dirs = [
-        'EMG Hand Data 20241030_225347',
-        'EMG Hand Data 20241030_231057',
-        # Add more test session directories as needed
-    ]
+    Parameters:
+    - session_dirs: List of session directory paths.
+    - emg_means: Precomputed means for EMG channels (required if use_existing_scaler is True).
+    - emg_stds: Precomputed standard deviations for EMG channels (required if use_existing_scaler is True).
+    - use_existing_scaler: Boolean indicating whether to use existing normalization parameters.
 
+    Returns:
+    - If use_existing_scaler is False:
+        - X: NumPy array of extracted features.
+        - y: NumPy array of binary labels.
+        - skipped: Number of samples skipped due to missing data.
+        - emg_means: Means of EMG channels.
+        - emg_stds: Standard deviations of EMG channels.
+    - If use_existing_scaler is True:
+        - X: NumPy array of extracted features.
+        - y: NumPy array of binary labels.
+        - skipped: Number of samples skipped due to missing data.
+    """
     all_features = []
     all_labels = []
     skipped = 0
-
-    all_emg_data = []
-
-    for session_dir in session_dirs:
-        emg_file = os.path.join(session_dir, 'emg.csv')
-        try:
-            emg_df = pd.read_csv(emg_file)
-            emg_channels = [f'emg_channel_{ch}' for ch in SELECTED_CHANNELS]
-            all_emg_data.append(emg_df[emg_channels])
-        except FileNotFoundError as e:
-            logging.error(f"File not found: {e}")
-            continue
-
-    all_emg_data = pd.concat(all_emg_data)
-    emg_means = all_emg_data.mean()
-    emg_stds = all_emg_data.std()
+    emg_channels = [f'emg_channel_{ch}' for ch in SELECTED_CHANNELS]
 
     for session_dir in session_dirs:
         emg_file = os.path.join(session_dir, 'emg.csv')
@@ -217,38 +230,45 @@ def main():
             logging.info(f"Data files loaded successfully for session {session_dir}.")
         except FileNotFoundError as e:
             logging.error(f"File not found: {e}")
-        expected_emg_columns = ['timestamp'] + [f'emg_channel_{ch}' for ch in SELECTED_CHANNELS]
+            continue
+
+        expected_emg_columns = ['timestamp'] + emg_channels
         if not all(col in emg_df.columns for col in expected_emg_columns):
-            logging.error("EMG data file is missing required columns.")
+            logging.error(f"EMG data file in {session_dir} is missing required columns.")
             continue
 
         expected_finger_columns = ['timestamp'] + list(JOINT_ANGLE_THRESHOLDS.keys())
         if not all(col in fingers_df.columns for col in expected_finger_columns):
-            logging.error("Finger data file is missing required columns.")
+            logging.error(f"Finger data file in {session_dir} is missing required columns.")
             continue
 
+        # Drop rows with missing data
         fingers_df.dropna(subset=expected_finger_columns, inplace=True)
         emg_df.dropna(subset=expected_emg_columns, inplace=True)
 
-        emg_channels = [f'emg_channel_{ch}' for ch in SELECTED_CHANNELS]
-        emg_means = emg_df[emg_channels].mean()
-        emg_stds = emg_df[emg_channels].std()
-        
-        emg_df[emg_channels] = (emg_df[emg_channels] - emg_means) / emg_stds
-        logging.info("EMG data normalized.")
+        if not use_existing_scaler:
+            current_emg_means = emg_df[emg_channels].mean()
+            current_emg_stds = emg_df[emg_channels].std()
+            emg_df[emg_channels] = (emg_df[emg_channels] - current_emg_means) / current_emg_stds
+            logging.info(f"EMG data normalized for session {session_dir}.")
+        else:
+            if emg_means is None or emg_stds is None:
+                raise ValueError("emg_means and emg_stds must be provided when use_existing_scaler is True.")
+            emg_df[emg_channels] = (emg_df[emg_channels] - emg_means) / emg_stds
+            logging.info(f"EMG data normalized using existing scaler for session {session_dir}.")
 
         emg_data = emg_df[emg_channels].values
         emg_timestamps = emg_df['timestamp'].values
-        logging.info("EMG data extracted.")
+        logging.info(f"EMG data extracted for session {session_dir}.")
 
         fingers_timestamps = fingers_df['timestamp'].values
         fingers_angles = fingers_df[expected_finger_columns[1:]]
-        logging.info("Finger data extracted.")
+        logging.info(f"Finger data extracted for session {session_dir}.")
 
         for idx, finger_timestamp in enumerate(fingers_timestamps):
             nearest_emg_idx = find_nearest_previous_timestamp(emg_timestamps, finger_timestamp)
             if nearest_emg_idx is None:
-                logging.warning(f"No EMG data before finger timestamp {finger_timestamp}. Skipping.")
+                logging.warning(f"No EMG data before finger timestamp {finger_timestamp} in session {session_dir}. Skipping.")
                 skipped += 1
                 continue
 
@@ -268,184 +288,192 @@ def main():
     logging.info(f"Feature extraction completed. Shape: {X.shape}")
 
     fingers_angles_df = pd.DataFrame(all_labels)
-
     y, group_names = create_labels(fingers_angles_df, FINGER_GROUPS, JOINT_ANGLE_THRESHOLDS)
     logging.info(f"Labels created. Shape: {y.shape}")
     logging.info(f"Number of skipped samples: {skipped}")
 
-    print_label_distribution(y, group_names, label='Overall')
+    print_label_distribution(y, group_names, label='Processed Sessions')
 
-    if np.isnan(X).any() or np.isinf(X).any():
-        logging.error("Features contain NaNs or infinite values. Please check data preprocessing.")
-        valid_indices = ~np.isnan(X).any(axis=1) & ~np.isinf(X).any(axis=1)
-        X = X[valid_indices]
-        y = y[valid_indices]
-        logging.info(f"After removing invalid samples, feature shape: {X.shape}, label shape: {y.shape}")
+    if not use_existing_scaler:
+        emg_means = emg_df[emg_channels].mean()
+        emg_stds = emg_df[emg_channels].std()
+        return X, y, skipped, emg_means, emg_stds
+    else:
+        return X, y, skipped
 
+def evaluate_model(model, X, y, group_names, label='Test Set'):
+    """
+    Evaluate the model and print classification metrics.
+
+    Parameters:
+    - model: Trained Keras model.
+    - X: Features for evaluation.
+    - y: True labels for evaluation.
+    - group_names: Names of the finger groups.
+    - label: Descriptor for the evaluation set.
+    """
+    loss, accuracy = model.evaluate(X, y, verbose=0)
+    logging.info(f"{label} Accuracy: {accuracy * 100:.2f}%")
+    logging.info(f"{label} Loss: {loss:.4f}")
+
+    y_pred_prob = model.predict(X)
+    y_pred = (y_pred_prob > 0.5).astype(int)
+
+    print(f"\n{label} Classification Report:")
+    print(classification_report(
+        y, y_pred,
+        target_names=group_names,
+        zero_division=0
+    ))
+
+    for i, finger_group in enumerate(group_names):
+        print(f"\nConfusion Matrix for {finger_group} ({label}):")
+        cm = confusion_matrix(y[:, i], y_pred[:, i])
+        print(cm)
+
+def main():
+    # Define session directories
+    training_session_dirs = [
+        'EMG Hand Data 20241030_223524',
+        'EMG Hand Data 20241030_224059',
+        'EMG Hand Data 20241030_224413',
+        'EMG Hand Data 20241030_225347',
+        'EMG Hand Data 20241030_231057',
+        'EMG Hand Data 20241030_232021',
+        'EMG Hand Data 20241030_233323',
+        'EMG Hand Data 20241030_234704',
+        'EMG Hand Data 20241030_235851',
+        'EMG Hand Data 20241031_001704',
+        'EMG Hand Data 20241031_002827',
+        # Add more training session directories as needed
+    ]
+
+    validation_session_dirs = [
+        'EMG Hand Data 20241031_001704',
+        # Add more validation session directories as needed
+    ]
+
+    test_session_dirs = [
+        'EMG Hand Data 20241031_002827',
+        # Add more test session directories as needed
+    ]
+
+    # Process training sessions
+    X_train_full, y_train_full, skipped_train, emg_means, emg_stds = process_sessions(
+        training_session_dirs,
+        use_existing_scaler=False
+    )
+    logging.info(f"Training data processed with {skipped_train} skipped samples.")
+
+    # Check for invalid features in training data
+    if np.isnan(X_train_full).any() or np.isinf(X_train_full).any():
+        logging.error("Training features contain NaNs or infinite values. Removing invalid samples.")
+        valid_indices = ~np.isnan(X_train_full).any(axis=1) & ~np.isinf(X_train_full).any(axis=1)
+        X_train_full = X_train_full[valid_indices]
+        y_train_full = y_train_full[valid_indices]
+        logging.info(f"After removal, training feature shape: {X_train_full.shape}, label shape: {y_train_full.shape}")
+
+    # Feature scaling on training data
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    logging.info("Feature scaling completed.")
+    X_train_scaled = scaler.fit_transform(X_train_full)
+    logging.info("Training feature scaling completed.")
 
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
-    logging.info("Data split into training and testing sets.")
+    # Process validation sessions using training EMG normalization parameters
+    X_val, y_val, skipped_val = process_sessions(
+        validation_session_dirs,
+        emg_means=emg_means,
+        emg_stds=emg_stds,
+        use_existing_scaler=True
+    )
+    logging.info(f"Validation data processed with {skipped_val} skipped samples.")
 
-    print_label_distribution(y_train, group_names, label='Training Set')
-    print_label_distribution(y_test, group_names, label='Test Set')
+    # Check for invalid features in validation data
+    if np.isnan(X_val).any() or np.isinf(X_val).any():
+        logging.error("Validation features contain NaNs or infinite values. Removing invalid samples.")
+        valid_indices = ~np.isnan(X_val).any(axis=1) & ~np.isinf(X_val).any(axis=1)
+        X_val = X_val[valid_indices]
+        y_val = y_val[valid_indices]
+        logging.info(f"After removal, validation feature shape: {X_val.shape}, label shape: {y_val.shape}")
 
+    # Feature scaling on validation data
+    X_val_scaled = scaler.transform(X_val)
+    logging.info("Validation feature scaling completed.")
+
+    # Display label distribution
+    group_names = list(FINGER_GROUPS.keys())
+    print_label_distribution(y_train_full, group_names, label='Training Set')
+    print_label_distribution(y_val, group_names, label='Validation Set')
+
+    # Compute class weights for each finger group
     class_weights = {}
     for i, finger_group in enumerate(group_names):
-        classes = np.unique(y_train[:, i])
+        classes = np.unique(y_train_full[:, i])
         if len(classes) > 1:
             cw = compute_class_weight(
                 class_weight='balanced',
                 classes=classes,
-                y=y_train[:, i]
+                y=y_train_full[:, i]
             )
             class_weights[i] = dict(zip(classes, cw))
         else:
             class_weights[i] = {classes[0]: 1.0}
     logging.info(f"Computed class weights: {class_weights}")
 
-    input_dim = X_train.shape[1]
-    output_dim = y_train.shape[1]
+    # Build the model
+    input_dim = X_train_scaled.shape[1]
+    output_dim = y_train_full.shape[1]
     model = build_model(input_dim, output_dim)
     logging.info("Model built.")
 
+    # Define callbacks
     early_stopping = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
-    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
+    # Train the model
     history = model.fit(
-        X_train, y_train,
+        X_train_scaled, y_train_full,
         epochs=50,
         batch_size=128,
-        validation_split=0.2,
+        validation_data=(X_val_scaled, y_val),
         callbacks=[early_stopping, reduce_lr],
         verbose=1
     )
     logging.info("Model training completed.")
 
+    # Plot learning curves
     plot_learning_curves(history)
 
-    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
-    logging.info(f"Test Accuracy: {accuracy * 100:.2f}%")
-    logging.info(f"Test Loss: {loss:.4f}")
+    # Evaluate on validation set
+    evaluate_model(model, X_val_scaled, y_val, group_names, label='Validation Set')
 
-    y_pred_prob = model.predict(X_test)
-    y_pred = (y_pred_prob > 0.5).astype(int)
-
-    print("\nClassification Report:")
-    print(classification_report(
-        y_test, y_pred,
-        target_names=group_names,
-        zero_division=0
-    ))
-
-    for i, finger_group in enumerate(group_names):
-        print(f"\nConfusion Matrix for {finger_group}:")
-        cm = confusion_matrix(y_test[:, i], y_pred[:, i])
-        print(cm)
-        
+    # Save the model and scaler
     timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
     model_dir = f'model_{timestamp}'
-    save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir)
+    save_model_and_preprocessing(model, scaler, model_dir)
 
-    # Load and test on additional test sessions
-    test_features = []
-    test_labels = []
-    test_skipped = 0
+    # Process test sessions using training EMG normalization parameters
+    X_test_additional, y_test_additional, skipped_test = process_sessions(
+        test_session_dirs,
+        emg_means=emg_means,
+        emg_stds=emg_stds,
+        use_existing_scaler=True
+    )
+    logging.info(f"Additional test data processed with {skipped_test} skipped samples.")
 
-    for session_dir in test_session_dirs:
-        emg_file = os.path.join(session_dir, 'emg.csv')
-        fingers_file = os.path.join(session_dir, 'finger_angles.csv')
-
-        try:
-            emg_df = pd.read_csv(emg_file)
-            fingers_df = pd.read_csv(fingers_file)
-            logging.info(f"Data files loaded successfully for test session {session_dir}.")
-        except FileNotFoundError as e:
-            logging.error(f"File not found: {e}")
-            continue
-
-        expected_emg_columns = ['timestamp'] + [f'emg_channel_{ch}' for ch in SELECTED_CHANNELS]
-        if not all(col in emg_df.columns for col in expected_emg_columns):
-            logging.error("EMG data file is missing required columns.")
-            continue
-
-        expected_finger_columns = ['timestamp'] + list(JOINT_ANGLE_THRESHOLDS.keys())
-        if not all(col in fingers_df.columns for col in expected_finger_columns):
-            logging.error("Finger data file is missing required columns.")
-            continue
-
-        fingers_df.dropna(subset=expected_finger_columns, inplace=True)
-        emg_df.dropna(subset=expected_emg_columns, inplace=True)
-
-        emg_df[emg_channels] = (emg_df[emg_channels] - emg_means) / emg_stds
-        logging.info("EMG data normalized.")
-
-        emg_data = emg_df[emg_channels].values
-        emg_timestamps = emg_df['timestamp'].values
-        logging.info("EMG data extracted.")
-
-        fingers_timestamps = fingers_df['timestamp'].values
-        fingers_angles = fingers_df[expected_finger_columns[1:]]
-        logging.info("Finger data extracted.")
-
-        for idx, finger_timestamp in enumerate(fingers_timestamps):
-            nearest_emg_idx = find_nearest_previous_timestamp(emg_timestamps, finger_timestamp)
-            if nearest_emg_idx is None:
-                logging.warning(f"No EMG data before finger timestamp {finger_timestamp}. Skipping.")
-                test_skipped += 1
-                continue
-
-            features = []
-            for frame_size in FRAME_SIZES:
-                start_idx = max(0, nearest_emg_idx - frame_size + 1)
-                end_idx = nearest_emg_idx + 1
-
-                frame_data = emg_data[start_idx:end_idx, :]
-                frame_features = extract_emg_features(frame_data, frame_size)
-                features.extend(frame_features)
-
-            test_features.append(features)
-            test_labels.append(fingers_angles.iloc[idx])
-
-    X_test_additional = np.array(test_features)
-    logging.info(f"Additional test feature extraction completed. Shape: {X_test_additional.shape}")
-
-    fingers_angles_df_test = pd.DataFrame(test_labels)
-
-    y_test_additional, _ = create_labels(fingers_angles_df_test, FINGER_GROUPS, JOINT_ANGLE_THRESHOLDS)
-    logging.info(f"Additional test labels created. Shape: {y_test_additional.shape}")
-    logging.info(f"Number of skipped samples in additional test set: {test_skipped}")
-
+    # Check for invalid features in additional test set
     if np.isnan(X_test_additional).any() or np.isinf(X_test_additional).any():
-        logging.error("Additional test features contain NaNs or infinite values. Please check data preprocessing.")
+        logging.error("Additional test features contain NaNs or infinite values. Removing invalid samples.")
         valid_indices = ~np.isnan(X_test_additional).any(axis=1) & ~np.isinf(X_test_additional).any(axis=1)
         X_test_additional = X_test_additional[valid_indices]
         y_test_additional = y_test_additional[valid_indices]
-        logging.info(f"After removing invalid samples, additional test feature shape: {X_test_additional.shape}, label shape: {y_test_additional.shape}")
+        logging.info(f"After removal, additional test feature shape: {X_test_additional.shape}, label shape: {y_test_additional.shape}")
 
+    # Feature scaling on additional test data
     X_test_additional_scaled = scaler.transform(X_test_additional)
     logging.info("Additional test feature scaling completed.")
 
-    loss_additional, accuracy_additional = model.evaluate(X_test_additional_scaled, y_test_additional, verbose=0)
-    logging.info(f"Additional Test Accuracy: {accuracy_additional * 100:.2f}%")
-    logging.info(f"Additional Test Loss: {loss_additional:.4f}")
-
-    y_pred_prob_additional = model.predict(X_test_additional_scaled)
-    y_pred_additional = (y_pred_prob_additional > 0.5).astype(int)
-
-    print("\nAdditional Test Classification Report:")
-    print(classification_report(
-        y_test_additional, y_pred_additional,
-        target_names=group_names,
-        zero_division=0
-    ))
-
-    for i, finger_group in enumerate(group_names):
-        print(f"\nConfusion Matrix for {finger_group} (Additional Test):")
-        cm = confusion_matrix(y_test_additional[:, i], y_pred_additional[:, i])
-        print(cm)
+    # Evaluate on additional test set
+    evaluate_model(model, X_test_additional_scaled, y_test_additional, group_names, label='Additional Test Set')
 
 if __name__ == "__main__":
     main()
