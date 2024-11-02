@@ -4,27 +4,22 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, Input, BatchNormalization, Conv1D, MaxPooling1D, Flatten
+from tensorflow.keras.layers import Dense, Dropout, Input, BatchNormalization, Conv1D, MaxPooling1D, Flatten, LSTM, Add, Activation
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras import backend as K
 import logging
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import joblib
 import os
 
-def save_model_and_preprocessing(model, scaler, model_dir):
-    """
-    Saves the trained model and the scaler to the specified directory.
-
-    Parameters:
-    - model: Trained Keras model.
-    - scaler: Fitted StandardScaler object.
-    - model_dir: Directory path to save the model and scaler.
-    """
-    os.makedirs(model_dir, exist_ok=True)
-    model.save(os.path.join(model_dir, 'model.keras'))
-    joblib.dump(scaler, os.path.join(model_dir, 'feature_scaler.joblib'))
-    logging.info(f"Model and scaler saved to directory {model_dir}.")
+from model_utils import (
+    find_nearest_previous_timestamp,
+    create_labels,
+    print_label_distribution,
+    build_cnn_model,
+    plot_learning_curves
+)
 
 # Configuration Parameters
 SAMPLING_RATE = 250
@@ -49,121 +44,23 @@ FRAME_STEP = 1   # Step size between frames
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-def find_nearest_previous_timestamp(emg_timestamps, target_timestamp):
+def save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir):
     """
-    Finds the index of the nearest EMG timestamp that is less than or equal to the target timestamp.
+    Saves the trained model and the scaler to the specified directory.
 
     Parameters:
-    - emg_timestamps: Numpy array of EMG timestamps.
-    - target_timestamp: The target timestamp to find the nearest previous EMG timestamp for.
-
-    Returns:
-    - Index of the nearest previous timestamp or None if not found.
+    - model: Trained Keras model.
+    - scaler: Fitted StandardScaler object.
+    - emg_means: Pandas Series containing means of EMG channels.
+    - emg_stds: Pandas Series containing standard deviations of EMG channels.
+    - model_dir: Directory path to save the model and scaler.
     """
-    idx = np.searchsorted(emg_timestamps, target_timestamp, side='right') - 1
-    return idx if idx >= 0 else None
-
-def create_labels(fingers_angles_df, finger_groups, thresholds):
-    """
-    Vectorized creation of binary labels indicating whether each finger group is closed for each sample.
-
-    Parameters:
-    - fingers_angles_df: DataFrame with finger angles for each sample.
-    - finger_groups: Dict mapping group names to list of fingers.
-    - thresholds: Dict mapping individual fingers to their threshold.
-
-    Returns:
-    - labels: numpy array with binary labels per group for each sample.
-    - group_names: List of group names in the order of labels.
-    """
-    labels = np.zeros((len(fingers_angles_df), len(finger_groups)), dtype=int)
-    group_names = list(finger_groups.keys())
-
-    # Iterate over each finger group
-    for i, (group_name, fingers) in enumerate(finger_groups.items()):
-        # Determine if any finger in the group is below its threshold
-        group_condition = np.any(
-            fingers_angles_df[fingers].lt([thresholds[f] for f in fingers], axis=1),
-            axis=1
-        )
-        labels[:, i] = group_condition.astype(int)
-
-    return labels, group_names
-
-def print_label_distribution(y, group_names, label='Overall'):
-    """
-    Print the distribution of labels for each finger group.
-
-    Parameters:
-    - y: numpy array with binary labels per group for each sample.
-    - group_names: List of group names corresponding to the labels.
-    - label: Descriptor for the label distribution being printed (e.g., 'Overall', 'Training Set').
-    """
-    total_samples = y.shape[0]
-    label_sums = np.sum(y, axis=0)
-    print(f"\nLabel distribution ({label}):")
-    for i, finger_group in enumerate(group_names):
-        count = label_sums[i]
-        percentage = (count / total_samples) * 100 if total_samples > 0 else 0
-        print(f"{finger_group}: {count}/{total_samples} ({percentage:.2f}%)")
-
-def build_cnn_model(input_shape, output_dim):
-    """
-    Builds and compiles the CNN neural network model.
-
-    Parameters:
-    - input_shape: Tuple representing the shape of the input data (NUM_FRAMES, NUM_CHANNELS).
-    - output_dim: Number of output classes.
-
-    Returns:
-    - Compiled Keras model.
-    """
-    model = Sequential([
-        Input(shape=input_shape),
-        Conv1D(filters=32, kernel_size=3, activation='relu', padding='same'),
-        MaxPooling1D(pool_size=2),
-        BatchNormalization(),
-        Dropout(0.3),
-
-        Conv1D(filters=64, kernel_size=3, activation='relu', padding='same'),
-        MaxPooling1D(pool_size=2),
-        BatchNormalization(),
-        Dropout(0.3),
-
-        Flatten(),
-        Dense(64, activation='relu'),
-        Dropout(0.5),
-        Dense(output_dim, activation='sigmoid')
-    ])
-    model.compile(optimizer='adam',
-                  loss='binary_crossentropy',
-                  metrics=[tf.keras.metrics.BinaryAccuracy()])
-    return model
-
-def plot_learning_curves(history):
-    """
-    Plots the learning curves for accuracy and loss.
-
-    Parameters:
-    - history: Keras History object from model training.
-    """
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['binary_accuracy'], label='Train Binary Accuracy')
-    plt.plot(history.history['val_binary_accuracy'], label='Validation Binary Accuracy')
-    plt.title('Model Binary Accuracy Over Epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Binary Accuracy')
-    plt.legend()
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Train Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Model Loss Over Epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+    os.makedirs(model_dir, exist_ok=True)
+    model.save(os.path.join(model_dir, 'model.keras'))
+    joblib.dump(scaler, os.path.join(model_dir, 'feature_scaler.joblib'))
+    # Save EMG normalization parameters
+    joblib.dump({'means': emg_means, 'stds': emg_stds}, os.path.join(model_dir, 'emg_normalization_params.joblib'))
+    logging.info(f"Model, scaler, and EMG normalization parameters saved to directory {model_dir}.")
 
 def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_stds=None, use_existing_scaler=False):
     """
@@ -397,22 +294,22 @@ def main():
         else:
             class_weights[i] = {classes[0]: 1.0}
     logging.info(f"Computed class weights: {class_weights}")
-
+    
     # Build the CNN model
     input_shape = (NUM_FRAMES, len(SELECTED_CHANNELS))
     output_dim = y_train_full.shape[1]
-    model = build_cnn_model(input_shape, output_dim)
+    model = build_cnn_model(input_shape, output_dim, class_weights)
     logging.info("CNN Model built.")
 
     # Define callbacks
-    early_stopping = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
+    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=10, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
     # Train the model
     history = model.fit(
         X_train_scaled, y_train_full,
-        epochs=5,  # Increased epochs for CNN
-        batch_size=256,  # Adjusted batch size
+        epochs=25,  # Increased epochs for CNN
+        batch_size=1024,  # Adjusted batch size
         validation_data=(X_val_scaled, y_val),
         callbacks=[early_stopping, reduce_lr],
         verbose=1
@@ -428,7 +325,7 @@ def main():
     # Save the model and scaler
     timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
     model_dir = f'model_{timestamp}'
-    save_model_and_preprocessing(model, scaler, model_dir)
+    save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir)
 
     # Process test sessions using training EMG normalization parameters
     X_test, y_test, skipped_test = process_sessions_frame_based(
