@@ -18,6 +18,7 @@ from model_utils import (
     create_labels,
     print_label_distribution,
     build_cnn_model,
+    build_cnn_model_stacked_channels,
     plot_learning_curves,
     resample_dataframe,
     resample_dataframe_signal,
@@ -27,7 +28,7 @@ from model_utils import (
 # Configuration Parameters
 SELECTED_CHANNELS = [1, 2, 3, 4, 5, 6, 7, 8]
 FINGER_GROUPS = {
-    'Thumb': ['THUMB'],
+    'Thumb': ['THUMB'], 
     'Index': ['INDEX'],
     'Middle': ['MIDDLE'],
     'Ring': ['RING'],
@@ -45,13 +46,13 @@ JOINT_ANGLE_THRESHOLDS = {
     'PINKY':  (30 + 167.5) / 2
 }
 
-# New Configuration Parameters for Frame-Based Processing
-NUM_FRAMES = 25  # Number of EMG frames to include before the timestamp
-FRAME_STEP = 1   # Step size between frames
-
 # Sampling Rates: Resample EMG and Finger data
-EMG_SAMPLING_RATE = 50  # Hz
-FINGER_SAMPLING_RATE = 10  # Hz
+EMG_SAMPLING_RATE = 250  # Hz
+FINGER_SAMPLING_RATE = 120  # Hz
+
+# New Configuration Parameters for Frame-Based Processing
+NUM_FRAMES = EMG_SAMPLING_RATE//2  # Number of EMG frames to include before the timestamp
+FRAME_STEP = 1   # Step size between frames
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -329,11 +330,11 @@ def main():
     # Build the CNN model
     input_shape = (NUM_FRAMES, len(SELECTED_CHANNELS))
     output_dim = y_train_full.shape[1]
-    model = build_cnn_model(input_shape, output_dim, class_weights)
+    model = build_cnn_model_stacked_channels(input_shape, output_dim, class_weights)
     logging.info("CNN Model built.")
 
     # Define callbacks
-    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=50, restore_best_weights=True)
+    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=5, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=1e-6)
     
     batch_size = 1024
@@ -344,21 +345,13 @@ def main():
         batch_size=batch_size, 
         shuffle=True,
         add_noise=True, 
-        noise_stddev=0.25,
-        apply_time_warp=True, 
+        noise_stddev=0.5,
+        apply_time_warp=False, 
         max_warp=0.25,
         apply_magnitude_scaling=True, 
         scale_range=(0.25, 1.25),
     )
     
-    val_generator = AugmentedDataGenerator(
-        X_val_scaled, y_val, 
-        batch_size=batch_size, 
-        shuffle=False,
-        add_noise=False, 
-        apply_time_warp=False, 
-        apply_magnitude_scaling=False,
-    )
     # Train the model
     history = model.fit(
         train_generator,

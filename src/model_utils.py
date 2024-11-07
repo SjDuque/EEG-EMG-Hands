@@ -9,10 +9,10 @@ from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import backend as K
-from tensorflow.keras.losses import Loss
+from tensorflow.keras.losses import Loss, BinaryCrossentropy, BinaryFocalCrossentropy
 from tensorflow.keras.utils import register_keras_serializable, Sequence
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, BatchNormalization, Dropout, Flatten, Dense, GaussianNoise
+from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, BatchNormalization, Dropout, Flatten, Dense, GaussianNoise, Conv2D, MaxPooling2D
 import logging
 
 class AugmentedDataGenerator(Sequence):
@@ -42,7 +42,7 @@ class AugmentedDataGenerator(Sequence):
         X_batch = self.X[batch_indices].copy()
         y_batch = self.y[batch_indices]
         
-        if self.add_noise or self.apply_time_warp or self.apply_magnitude_scaling or self.apply_bandpass_filter:
+        if self.add_noise or self.apply_time_warp or self.apply_magnitude_scaling:
             X_batch = self._apply_augmentations(X_batch)
         
         return X_batch, y_batch
@@ -155,6 +155,13 @@ def create_labels(fingers_angles_df, finger_groups, thresholds):
         labels[:, i] = group_condition.astype(int)
     return labels, group_names
 
+def create_regression_labels(fingers_angles_df, finger_groups):
+    labels = np.zeros((len(fingers_angles_df), len(finger_groups)), dtype=float)
+    group_names = list(finger_groups.keys())
+    for i, (group_name, fingers) in enumerate(finger_groups.items()):
+        labels[:, i] = fingers_angles_df[fingers].mean(axis=1)
+    return labels, group_names
+
 def print_label_distribution(y, group_names, label='Overall'):
     total_samples = y.shape[0]
     label_sums = np.sum(y, axis=0)
@@ -192,10 +199,35 @@ def build_cnn_model(input_shape, output_dim, class_weights=None, noise_stddev=0.
     # Add Gaussian Noise Layer
     # x = GaussianNoise(noise_stddev)(inputs)  # Adjust noise_stddev as needed
     
-    x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = Conv1D(filters=16, kernel_size=3, activation='relu', padding='same')(inputs)
     x = MaxPooling1D(pool_size=2)(x) 
     x = BatchNormalization()(x)
     x = Dropout(0.5)(x)
+    
+    x = Conv1D(filters=32, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = MaxPooling1D(pool_size=2)(x) 
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    x = Conv1D(filters=64, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = MaxPooling1D(pool_size=2)(x) 
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    x = Conv1D(filters=128, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = MaxPooling1D(pool_size=2)(x) 
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    x = Conv1D(filters=256, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = MaxPooling1D(pool_size=2)(x) 
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    # x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
+    # x = MaxPooling1D(pool_size=2)(x) 
+    # x = BatchNormalization()(x)
+    # x = Dropout(0.5)(x)
     
     # x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
     # x = MaxPooling1D(pool_size=2)(x) 
@@ -208,18 +240,112 @@ def build_cnn_model(input_shape, output_dim, class_weights=None, noise_stddev=0.
     # x = Dropout(0.5)(x)
     
     x = Flatten()(x)
-    # x = Dense(512, activation='relu')(x)
     outputs = Dense(output_dim, activation='sigmoid')(x)
     model = Model(inputs=inputs, outputs=outputs)
     
     if class_weights:
         loss_fn = WeightedBinaryCrossentropy(class_weights)
     else:
-        loss_fn = 'binary_crossentropy'
+        loss_fn = BinaryFocalCrossentropy(apply_class_balancing=True)
     
     model.compile(optimizer='adam',
                   loss=loss_fn,
                   metrics=['binary_accuracy'])
+    return model
+
+def build_cnn_model_stacked_channels(input_shape, output_dim, class_weights=None):
+    inputs = Input(shape=input_shape)
+    
+    # Reshape input to add a channel dimension for 2D convolutions
+    x = tf.keras.layers.Reshape((*input_shape, 1))(inputs)
+    
+    x = Conv2D(filters=32, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 1))(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    x = Conv2D(filters=64, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 1))(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    x = Conv2D(filters=128, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 1))(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    # x = Conv2D(filters=64, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    # x = MaxPooling2D(pool_size=(2, 2))(x)
+    # x = BatchNormalization()(x)
+    # x = Dropout(0.5)(x)
+    
+    # x = Conv2D(filters=128, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    # x = MaxPooling2D(pool_size=(2, 1))(x)
+    # x = BatchNormalization()(x)
+    # x = Dropout(0.5)(x)
+    
+    # x = Conv2D(filters=256, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    # x = MaxPooling2D(pool_size=(2, 1))(x)
+    # x = BatchNormalization()(x)
+    # x = Dropout(0.5)(x)
+    
+    x = Flatten()(x)
+    # x = Dense(64, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    outputs = Dense(output_dim, activation='sigmoid')(x)
+    model = Model(inputs=inputs, outputs=outputs)
+    
+    if class_weights:
+        loss_fn = WeightedBinaryCrossentropy(class_weights)
+    else:
+        loss_fn = BinaryFocalCrossentropy(apply_class_balancing=True)
+    
+    model.compile(optimizer='adam',
+                  loss=loss_fn,
+                  metrics=['binary_accuracy'])
+    return model
+
+@tf.keras.utils.register_keras_serializable()
+class WeightedMSE(Loss):
+    def __init__(self, output_weights, name='weighted_mse'):
+        super().__init__(name=name)
+        self.output_weights = tf.constant(output_weights, dtype=tf.float32)
+    
+    def call(self, y_true, y_pred):
+        mse = K.square(y_true - y_pred)
+        weighted_mse = mse * self.output_weights
+        return K.mean(weighted_mse)
+
+def build_cnn_model_regression(input_shape, output_dim, class_weights=None):
+    inputs = Input(shape=input_shape)
+    
+    # Add Gaussian Noise Layer
+    # x = GaussianNoise(noise_stddev)(inputs)  # Adjust noise_stddev as needed
+    
+    x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
+    x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+        
+    x = Flatten()(x)
+    x = Dense(256, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    outputs = Dense(output_dim, activation='sigmoid')(x)
+    model = Model(inputs=inputs, outputs=outputs)
+    
+    if class_weights:
+        loss_fn = WeightedMSE(class_weights)
+    else:
+        loss_fn = 'mse'
+        
+    model.compile(optimizer='adam',
+                    loss=loss_fn,
+                    metrics=['mean_absolute_error'])
     return model
 
 def plot_learning_curves(history):
