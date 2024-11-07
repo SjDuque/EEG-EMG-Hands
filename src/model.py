@@ -18,16 +18,20 @@ from model_utils import (
     create_labels,
     print_label_distribution,
     build_cnn_model,
-    plot_learning_curves
+    plot_learning_curves,
+    resample_dataframe,
+    resample_dataframe_signal
 )
 
 # Configuration Parameters
-SAMPLING_RATE = 250
 SELECTED_CHANNELS = [1, 2, 3, 4, 5, 6, 7, 8]
 FINGER_GROUPS = {
     'Thumb': ['THUMB'],
-    'Index_Middle': ['INDEX', 'MIDDLE'],
-    'Ring_Pinky': ['RING', 'PINKY'],
+    'Index': ['INDEX'],
+    'Middle': ['MIDDLE'],
+    # 'Ring_Pinky': ['RING', 'PINKY'],
+    'Ring': ['RING'],
+    'Pinky': ['PINKY']
 }
 
 JOINT_ANGLE_THRESHOLDS = {
@@ -39,14 +43,18 @@ JOINT_ANGLE_THRESHOLDS = {
 }
 
 # New Configuration Parameters for Frame-Based Processing
-NUM_FRAMES = 50  # Number of frames to include before the timestamp
+NUM_FRAMES = 20  # Number of EMG frames to include before the timestamp
 FRAME_STEP = 1   # Step size between frames
+
+# Sampling Rates: Resample EMG and Finger data
+EMG_SAMPLING_RATE = 50  # Hz
+FINGER_SAMPLING_RATE = 10  # Hz
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-def save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir):
+def save_model_and_preprocessing(model, emg_scaler, emg_means, emg_stds, model_dir):
     """
-    Saves the trained model and the scaler to the specified directory.
+    Saves the trained model and the emg scaler to the specified directory.
 
     Parameters:
     - model: Trained Keras model.
@@ -57,10 +65,21 @@ def save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir):
     """
     os.makedirs(model_dir, exist_ok=True)
     model.save(os.path.join(model_dir, 'model.keras'))
-    joblib.dump(scaler, os.path.join(model_dir, 'feature_scaler.joblib'))
-    # Save EMG normalization parameters
-    joblib.dump({'means': emg_means, 'stds': emg_stds}, os.path.join(model_dir, 'emg_normalization_params.joblib'))
-    logging.info(f"Model, scaler, and EMG normalization parameters saved to directory {model_dir}.")
+    # Save the EMG scaler
+    joblib.dump(emg_scaler, os.path.join(model_dir, 'emg_scaler.joblib'))
+    # Save Configuration Parameters
+    config = {
+        'NUM_FRAMES': NUM_FRAMES,
+        'FRAME_STEP': FRAME_STEP,
+        'FINGER_GROUPS': FINGER_GROUPS,
+        'SELECTED_CHANNELS': SELECTED_CHANNELS,
+        'JOINT_ANGLE_THRESHOLDS': JOINT_ANGLE_THRESHOLDS,
+        'EMG_MEANS': emg_means,
+        'EMG_STDS': emg_stds,
+    }
+    joblib.dump(config, os.path.join(model_dir, 'config.joblib'))
+    
+    logging.info(f"Model and preprocessing saved to {model_dir}.")
 
 def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_stds=None, use_existing_scaler=False):
     """
@@ -101,7 +120,14 @@ def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_s
         except FileNotFoundError as e:
             logging.error(f"File not found: {e}")
             continue
-
+        
+        # Resample EMG data
+        emg_df = resample_dataframe_signal(emg_df, desired_rate=EMG_SAMPLING_RATE)
+        logging.info(f"EMG data resampled for session {session_dir}.")
+        # Resample Finger data
+        fingers_df = resample_dataframe(fingers_df, desired_rate=FINGER_SAMPLING_RATE)
+        logging.info(f"Finger data resampled for session {session_dir}.")
+        
         expected_emg_columns = ['timestamp'] + emg_channels
         if not all(col in emg_df.columns for col in expected_emg_columns):
             logging.error(f"EMG data file in {session_dir} is missing required columns.")
@@ -203,7 +229,8 @@ def evaluate_model(model, X, y, group_names, label='Test Set'):
         print(cm)
 
 def main():
-    # Define session directories
+    # Define session directories:
+    # EMG Hand Data 20241030_223524 EMG Hand Data 20241030_224059 EMG Hand Data 20241030_224413 EMG Hand Data 20241030_225347 EMG Hand Data 20241030_231057 EMG Hand Data 20241030_232021 EMG Hand Data 20241030_233323 EMG Hand Data 20241030_234704 EMG Hand Data 20241030_235851 EMG Hand Data 20241031_001704 EMG Hand Data 20241031_002827
     training_session_dirs = [
         'EMG Hand Data 20241030_223524',
         'EMG Hand Data 20241030_224059',
@@ -218,12 +245,12 @@ def main():
     ]
 
     validation_session_dirs = [
-        'EMG Hand Data 20241031_001704',
+        'EMG Hand Data 20241031_002827',
         # Add more validation session directories as needed
     ]
 
     test_session_dirs = [
-        'EMG Hand Data 20241031_002827',
+        'EMG Hand Data 20241031_001704',
         # Add more test session directories as needed
     ]
 
@@ -302,13 +329,13 @@ def main():
     logging.info("CNN Model built.")
 
     # Define callbacks
-    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=10, restore_best_weights=True)
+    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=25, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
 
     # Train the model
     history = model.fit(
         X_train_scaled, y_train_full,
-        epochs=25,  # Increased epochs for CNN
+        epochs=200,  # Increased epochs for CNN
         batch_size=1024,  # Adjusted batch size
         validation_data=(X_val_scaled, y_val),
         callbacks=[early_stopping, reduce_lr],

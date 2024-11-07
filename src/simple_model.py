@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 import joblib
 import os
+from tensorflow.keras import backend as K
 
 def save_model_and_preprocessing(model, scaler, model_dir):
     """
@@ -29,14 +30,12 @@ def save_model_and_preprocessing(model, scaler, model_dir):
 # Configuration Parameters
 SAMPLING_RATE = 250
 SELECTED_CHANNELS = [1, 2, 3, 4, 5, 6, 7, 8]
-FRAME_SIZES = [1, 2, 4, 8, 16, 32, 48, 64]
+FRAME_SIZES = [50, 25, 10, 5, 1]
 
 FINGER_GROUPS = {
     'Thumb': ['THUMB'],
-    'Index': ['INDEX'],
-    'Middle': ['MIDDLE'],
-    'Ring': ['RING'],
-    'Pinky': ['PINKY'],
+    'Index_Middle': ['INDEX', 'MIDDLE'],
+    'Ring_Pinky': ['RING', 'PINKY'],
 }
 
 JOINT_ANGLE_THRESHOLDS = {
@@ -144,7 +143,37 @@ def print_label_distribution(y, group_names, label='Overall'):
         percentage = (count / total_samples) * 100 if total_samples > 0 else 0
         print(f"{finger_group}: {count}/{total_samples} ({percentage:.2f}%)")
 
-def build_model(input_dim, output_dim):
+def weighted_binary_crossentropy(class_weights):
+    """
+    A custom loss function that applies class weights to binary cross-entropy loss.
+    
+    Parameters:
+    - class_weights: Dictionary mapping class indices to weights.
+                     Example: {0: {0: w0_neg, 1: w0_pos}, 1: {0: w1_neg, 1: w1_pos}, ...}
+    
+    Returns:
+    - A loss function that can be used with model.compile.
+    """
+    # Extract weights for all classes
+    class_weights_neg = tf.constant([class_weights[i][0] for i in range(len(class_weights))], dtype=tf.float32)
+    class_weights_pos = tf.constant([class_weights[i][1] for i in range(len(class_weights))], dtype=tf.float32)
+    
+    def loss(y_true, y_pred):
+        # Compute binary cross-entropy
+        bce = K.binary_crossentropy(y_true, y_pred)
+        
+        # Compute weights: y_true * weight_pos + (1 - y_true) * weight_neg
+        weight = y_true * class_weights_pos + (1 - y_true) * class_weights_neg
+        
+        # Apply weights to the loss
+        weighted_bce = bce * weight
+        
+        # Return the mean loss over all classes and samples
+        return K.mean(weighted_bce)
+    
+    return loss
+
+def build_model(input_dim, output_dim, class_weights=None):
     """
     Builds and compiles the neural network model.
 
@@ -157,14 +186,10 @@ def build_model(input_dim, output_dim):
     """
     model = Sequential([
         Input(shape=(input_dim,)),
-        Dense(128, activation='relu'),
-        Dropout(0.3),
-        Dense(64, activation='relu'),
-        Dropout(0.3),
         Dense(output_dim, activation='sigmoid')
     ])
     model.compile(optimizer='adam',
-                  loss='binary_crossentropy',
+                  loss=weighted_binary_crossentropy(class_weights) if class_weights else 'binary_crossentropy',
                   metrics=[tf.keras.metrics.BinaryAccuracy()])
     return model
 
@@ -343,8 +368,6 @@ def main():
         'EMG Hand Data 20241030_233323',
         'EMG Hand Data 20241030_234704',
         'EMG Hand Data 20241030_235851',
-        'EMG Hand Data 20241031_001704',
-        'EMG Hand Data 20241031_002827',
         # Add more training session directories as needed
     ]
 
@@ -422,7 +445,7 @@ def main():
     # Build the model
     input_dim = X_train_scaled.shape[1]
     output_dim = y_train_full.shape[1]
-    model = build_model(input_dim, output_dim)
+    model = build_model(input_dim, output_dim, class_weights)
     logging.info("Model built.")
 
     # Define callbacks
@@ -432,8 +455,8 @@ def main():
     # Train the model
     history = model.fit(
         X_train_scaled, y_train_full,
-        epochs=50,
-        batch_size=128,
+        epochs=25,
+        batch_size=512,
         validation_data=(X_val_scaled, y_val),
         callbacks=[early_stopping, reduce_lr],
         verbose=1

@@ -1,9 +1,8 @@
 import numpy as np
 import os
 import json
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model
-import pylsl
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+import joblib # For loading the SVM model
 from pylsl import StreamInlet, resolve_stream
 import threading
 import time
@@ -23,28 +22,51 @@ def load_preprocessing_data(preprocessing_file):
         preprocessing_data = json.load(f)
     return preprocessing_data
 
-def collect_emg_data(inlet, emg_data_list, stop_event, required_samples):
+def collect_emg_data(inlet, emg_data_list, stop_event, required_samples, num_channels):
     """Collect EMG data in real-time and keep only the last required_samples."""
     while not stop_event.is_set():
         try:
             sample, _ = inlet.pull_sample(timeout=1.0)
             if sample:
-                emg_data_list.append(sample[:4])  # Keep only the first 4 channels
+                emg_data_list.append(sample[:num_channels])  # Keep only required channels
                 # Maintain the list to the last 'required_samples' samples
                 if len(emg_data_list) > required_samples:
                     emg_data_list.pop(0)
         except Exception as e:
             print(f"Error in EMG data collection: {e}")
 
-def main():
-    # File paths (update as necessary)
-    model_file = 'EMG_Model_20241013_144632/emg_lstm_model.keras'
-    preprocessing_file = 'EMG_Model_20241013_144632/preprocessing_info.json'  # Preprocessing JSON file
+def compute_features(frame):
+    """
+    Compute features from a frame of shape (time_steps, num_channels).
 
-    # Load the saved model
-    print("Loading the trained model...")
-    model = load_model(model_file)
-    print("Model loaded successfully.")
+    Returns:
+    - feature_vector: 1D array of features.
+    """
+    features = []
+    # For each channel
+    for i in range(frame.shape[1]):
+        channel_data = frame[:, i]
+        # Compute statistical features
+        features.append(np.mean(channel_data))
+        features.append(np.std(channel_data))
+        features.append(np.min(channel_data))
+        features.append(np.max(channel_data))
+        features.append(np.median(channel_data))
+    return np.array(features)
+
+def main():
+    # Directory containing the model and preprocessing info
+    model_dir = 'EMG_Model_20241016_173750'  # Replace with your actual folder name
+
+    # File paths
+    model_file = os.path.join(model_dir, 'emg_svm_model.joblib')
+    preprocessing_file = os.path.join(model_dir, 'preprocessing_info.json')  # Preprocessing JSON file
+    scaler_file = os.path.join(model_dir, 'feature_scaler.joblib')
+
+    # Load the saved SVM model
+    print("Loading the trained SVM model...")
+    svm_model = joblib.load(model_file)
+    print("SVM model loaded successfully.")
 
     # Load preprocessing data
     print("Loading preprocessing data...")
@@ -55,7 +77,14 @@ def main():
     frame_size_ms = preprocessing_data['frame_size_ms']
     sampling_rate = preprocessing_data['sampling_rate']
     required_samples = int((frame_size_ms / 1000) * sampling_rate)
+    best_thresholds = preprocessing_data['best_thresholds']
+    num_channels = len(scaler_emg.scale_)
     print("Preprocessing data loaded.")
+
+    # Load the feature scaler
+    print("Loading feature scaler...")
+    feature_scaler = joblib.load(scaler_file)
+    print("Feature scaler loaded.")
 
     # Initialize EMG stream
     print("Looking for all available EMG streams...")
@@ -65,10 +94,13 @@ def main():
         return
     inlet = StreamInlet(streams[0])
 
-    # Set up data collection for a 100 ms window (25 samples at 250 Hz)
+    # Set up data collection for the required window size
     emg_data_list = []
     stop_event = threading.Event()
-    emg_thread = threading.Thread(target=collect_emg_data, args=(inlet, emg_data_list, stop_event, required_samples))
+    emg_thread = threading.Thread(
+        target=collect_emg_data,
+        args=(inlet, emg_data_list, stop_event, required_samples, num_channels)
+    )
     emg_thread.start()
 
     # Main loop for real-time prediction
@@ -78,17 +110,28 @@ def main():
                 continue  # Wait until we have enough samples
 
             # Prepare data for prediction
-            X = scaler_emg.transform(emg_data_list[-required_samples:])
-            X = np.array([X])  # Reshape for model input
-            # Make predictions and debug output
-            predictions = model.predict(X, verbose=0)
-            # print("Raw Predictions:", predictions)  # Debugging line to see prediction values
-            predictions_binary = (predictions > 0.5).astype(int)
+            X = np.array(emg_data_list[-required_samples:])  # Shape: (required_samples, num_channels)
+            # Optional: Ensure X has the correct number of channels
+            X = X[:, :num_channels]
+            X = scaler_emg.transform(X)
+
+            # Compute features from the EMG data
+            feature_vector = compute_features(X)  # Shape: (num_features,)
+            feature_vector = feature_vector.reshape(1, -1)  # Reshape for scaler and model input
+
+            # Scale the features
+            feature_vector_scaled = feature_scaler.transform(feature_vector)
+
+            # Make predictions using the SVM model
+            predictions_decision = svm_model.decision_function(feature_vector_scaled)[0]
+
+            # Apply best thresholds
+            predictions_binary = (predictions_decision > best_thresholds).astype(int)
 
             # Convert predictions to colored dots for display
-            pinky_ring_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if predictions_binary[0][0] else f"{COLOR_GRAY}●{COLOR_RESET}"
-            pointer_middle_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if predictions_binary[0][1] else f"{COLOR_GRAY}●{COLOR_RESET}"
-            thumb_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if predictions_binary[0][2] else f"{COLOR_GRAY}●{COLOR_RESET}"
+            pinky_ring_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if predictions_binary[0] else f"{COLOR_GRAY}●{COLOR_RESET}"
+            pointer_middle_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if predictions_binary[1] else f"{COLOR_GRAY}●{COLOR_RESET}"
+            thumb_dot = f"{COLOR_GREEN}●{COLOR_RESET}" if predictions_binary[2] else f"{COLOR_GRAY}●{COLOR_RESET}"
 
             # Display the predictions
             clear_console()
@@ -98,7 +141,7 @@ def main():
             print(f"Thumb:          {thumb_dot}")
 
             # Optional small delay
-            time.sleep(0.01)
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("Interrupted by user")

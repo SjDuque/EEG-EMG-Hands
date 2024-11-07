@@ -173,7 +173,7 @@ def main():
     # Paths to data, model, and preprocessing information
     emg_file = 'EMG Hand Data 20241031_001704/emg.csv'  # Update with your EMG data path
     fingers_file = 'EMG Hand Data 20241031_001704/finger_angles.csv'  # Update with your finger angles data path
-    model_dir = 'model_20241031_190538'  # Directory where your model and preprocessing artifacts are saved
+    model_dir = 'model_20241031_205326'  # Directory where your model and preprocessing artifacts are saved
     model_file = os.path.join(model_dir, 'model.keras')  # Path to your trained model file
 
     # Configuration Parameters (should match those used during training)

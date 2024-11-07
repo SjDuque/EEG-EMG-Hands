@@ -13,7 +13,101 @@ from tensorflow.keras import backend as K
 from tensorflow.keras.losses import Loss
 from tensorflow.keras.utils import register_keras_serializable
 
-# Existing functions from model.py
+# model_utils.py
+from scipy.signal import resample
+
+def resample_dataframe_signal(df, desired_rate, time_column='timestamp'):
+    # Ensure the time column is sorted
+    df = df.sort_values(by=time_column).reset_index(drop=True)
+    
+    # Remove rows where all data columns are NaN
+    data_columns = df.columns.drop(time_column)
+    df = df.dropna(subset=data_columns, how='all').reset_index(drop=True)
+    
+    # Original sampling rate
+    time_values = df[time_column].values
+    start_time = time_values[0]
+    end_time = time_values[-1]
+    original_rate = 1.0 / np.mean(np.diff(time_values))
+    
+    num_samples = int((end_time - start_time) * desired_rate)
+    new_time_values = np.linspace(start_time, end_time, num=num_samples)
+    
+    resampled_data = {time_column: new_time_values}
+    
+    for col in data_columns:
+        if df[col].isna().all():
+            resampled_data[col] = np.full_like(new_time_values, np.nan, dtype=np.float64)
+            continue
+        # Interpolate using resample, ignoring NaNs
+        signal = df[col].interpolate().fillna(method='bfill').fillna(method='ffill').values
+        resampled_signal = resample(signal, num_samples)
+        resampled_data[col] = resampled_signal
+    
+    resampled_df = pd.DataFrame(resampled_data)
+    return resampled_df
+
+
+def resample_dataframe(df, desired_rate, time_column='timestamp', method='linear'):
+    """
+    Resample the DataFrame to the desired sampling rate without creating data where it doesn't exist.
+    
+    Parameters:
+    - df: pandas DataFrame containing the data to resample.
+    - desired_rate: Desired sampling rate in Hz.
+    - time_column: Name of the time column in df.
+    - method: Interpolation method ('linear', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic', etc.)
+    
+    Returns:
+    - resampled_df: DataFrame resampled to the desired rate.
+    """
+    # Ensure the time column is sorted
+    df = df.sort_values(by=time_column).reset_index(drop=True)
+    
+    # Remove rows where all data columns are NaN
+    data_columns = df.columns.drop(time_column)
+    df = df.dropna(subset=data_columns, how='all').reset_index(drop=True)
+    
+    # Get the time values where data is available
+    time_values = df[time_column].values
+    
+    # Determine the new time values
+    start_time = time_values[0]
+    end_time = time_values[-1]
+    
+    # Generate new time values at desired_rate
+    sampling_interval = 1.0 / desired_rate
+    new_time_values = np.arange(start_time, end_time, sampling_interval)
+    
+    # Interpolate data columns onto new time grid
+    from scipy.interpolate import interp1d
+    
+    resampled_data = {time_column: new_time_values}
+    
+    for col in data_columns:
+        # Mask NaN values
+        valid_mask = ~np.isnan(df[col].values)
+        if np.sum(valid_mask) < 2:
+            # Not enough data to interpolate, fill with NaN
+            resampled_data[col] = np.full_like(new_time_values, np.nan, dtype=np.float64)
+            continue
+        
+        # Create interpolation function only with valid data
+        interp_func = interp1d(
+            time_values[valid_mask],
+            df[col].values[valid_mask],
+            kind=method,
+            bounds_error=False,
+            fill_value=np.nan  # Keep NaN where data is missing
+        )
+        # Interpolate onto new time values
+        resampled_data[col] = interp_func(new_time_values)
+    
+    resampled_df = pd.DataFrame(resampled_data)
+    
+    return resampled_df
+
+
 def find_nearest_previous_timestamp(emg_timestamps, target_timestamp):
     idx = np.searchsorted(emg_timestamps, target_timestamp, side='right') - 1
     return idx if idx >= 0 else None
@@ -67,17 +161,14 @@ def build_cnn_model(input_shape, output_dim, class_weights=None):
     from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, BatchNormalization, Dropout, Flatten, Dense
 
     inputs = Input(shape=input_shape)
-    x = Conv1D(filters=48, kernel_size=3, activation='relu', padding='same')(inputs)
+    x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
     x = MaxPooling1D(pool_size=2)(x) 
     x = BatchNormalization()(x)
     x = Dropout(0.5)(x)
     
-    # x = Conv1D(filters=32, kernel_size=3, activation='relu', padding='same')(inputs)
-    # x = MaxPooling1D(pool_size=2)(x) 
-    # x = BatchNormalization()(x)
-    # x = Dropout(0.3)(x)
-    
     x = Flatten()(x)
+    # x = Dense(16, activation='relu')(x)
+    # x = Dropout(0.5)(x)
     outputs = Dense(output_dim, activation='sigmoid')(x)
     model = Model(inputs=inputs, outputs=outputs)
     

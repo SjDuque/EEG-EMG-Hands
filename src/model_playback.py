@@ -64,12 +64,12 @@ def map_model_predictions_to_fingers(y_pred):
     """
     finger_pred = []
     for pred in y_pred:
-        thumb, index_middle, ring_pinky = pred
+        thumb, index, middle, ring_pinky = pred
         # Each group maps to specific fingers
         finger_pred.append([
             thumb,            # Thumb
-            index_middle,     # Index
-            index_middle,     # Middle
+            index,     # Index
+            middle,     # Middle
             ring_pinky,       # Ring
             ring_pinky        # Pinky
         ])
@@ -320,7 +320,7 @@ def main():
     # Paths to data, model, and preprocessing information
     emg_file = f'{FOLDER_PATH}/emg.csv'  # Update with your EMG data path
     fingers_file = f'{FOLDER_PATH}/finger_angles.csv'  # Update with your finger angles data path
-    model_dir = 'model_20241102_032754'  # Directory where your model and preprocessing artifacts are saved
+    model_dir = 'model_20241102_034210'  # Directory where your model and preprocessing artifacts are saved
     model_file = os.path.join(model_dir, 'model.keras')  # Path to your trained model file
 
     # Configuration Parameters (should match those used during training)
@@ -339,7 +339,8 @@ def main():
 
     FINGER_GROUPS = {
         'Thumb': ['THUMB'],
-        'Index_Middle': ['INDEX', 'MIDDLE'],
+        'Index': ['INDEX'],
+        'Middle': ['MIDDLE'],
         'Ring_Pinky': ['RING', 'PINKY'],
     }
 
@@ -468,7 +469,7 @@ def main():
     logging.info("Predictions made on the new data.")
 
     # Apply smoothing to the prediction probabilities
-    beta = 0.5
+    beta = 0.75
     smoothed_prob = smooth_predictions(y_pred_prob, beta=beta)
     logging.info(f"Applied exponential moving average smoothing with beta={beta}.")
 

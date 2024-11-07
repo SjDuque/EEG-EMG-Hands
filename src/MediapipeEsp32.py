@@ -1,6 +1,6 @@
 import serial
 import sys
-from HandTracking import HandTracking  # Importing the HandTracking class
+from HandTracking.hand_tracking import HandTracking  # Importing the HandTracking class
 
 # Replace with your ESP32 Bluetooth serial port
 esp32_port = '/dev/cu.ESP32_Hand'

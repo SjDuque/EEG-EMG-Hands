@@ -110,7 +110,7 @@ def capture_camera_frames(frames_folder, stop_event, refresh_rate=None, resoluti
 def process_frames(frames_folder, output_csv):
     """Process saved frames with MediaPipe to extract finger angles and save to CSV."""
     mp_hands = mp.solutions.hands
-    mp_drawing = mp.solutions.drawing_utils
+    # mp_drawing = mp.solutions.drawing_utils
 
     hand_data_list = []
 
@@ -226,7 +226,7 @@ def main():
     os.makedirs(frames_folder, exist_ok=True)
     
     # Specify whether to delete the camera frames folder after processing
-    delete_frames = True
+    delete_frames = False
 
     # Start camera capture in a separate thread
     # Optional: Specify desired camera refresh rate (in Hz), or set to None for maximum rate
@@ -283,7 +283,7 @@ def main():
             current_time = time.time()
             if current_time - last_display_time >= 1.0:
                 display_framerate = frame_update_count / (current_time - last_display_time)
-                print(f"Display Refresh Rate: {display_framerate:.2f} Hz", end='\r')
+                print(f"Display Refresh Rate: {display_framerate:.2f} Hz")
                 frame_update_count = 0
                 last_display_time = current_time
 

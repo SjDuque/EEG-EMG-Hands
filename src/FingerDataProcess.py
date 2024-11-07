@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import mediapipe as mp
+import logging
 
 class FingerDataProcessor:
     """
@@ -9,15 +10,17 @@ class FingerDataProcessor:
 
     def __init__(self, angle_thresholds=None):
         """
-        Initialize the HandAngleProcessor with optional angle thresholds.
+        Initialize the FingerDataProcessor with optional angle thresholds.
 
         Parameters:
             angle_thresholds (dict, optional): A dictionary specifying angle thresholds for each finger.
                                                If None, default thresholds are used.
         """
+        # Configure logging
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
         # Initialize MediaPipe HandLandmark
-        self.mp_hands = mp.solutions.hands
-        self.HandLandmark = self.mp_hands.HandLandmark
+        self.HandLandmark = mp.solutions.hands.HandLandmark
 
         # Define fingers
         self.fingers = ['THUMB', 'INDEX', 'MIDDLE', 'RING', 'PINKY']
@@ -30,11 +33,11 @@ class FingerDataProcessor:
 
         # Define joint sets for each finger using landmark names
         self.joint_sets = {
-            'THUMB':    [("WRIST", "THUMB_MCP", "THUMB_TIP")],
-            'INDEX':    [("WRIST", "INDEX_FINGER_MCP", "INDEX_FINGER_TIP")],
+            'THUMB':    [("WRIST", "THUMB_MCP",         "THUMB_TIP")],
+            'INDEX':    [("WRIST", "INDEX_FINGER_MCP",  "INDEX_FINGER_TIP")],
             'MIDDLE':   [("WRIST", "MIDDLE_FINGER_MCP", "MIDDLE_FINGER_TIP")],
-            'RING':     [("WRIST", "RING_FINGER_MCP", "RING_FINGER_TIP")],
-            'PINKY':    [("WRIST", "PINKY_MCP", "PINKY_TIP")],
+            'RING':     [("WRIST", "RING_FINGER_MCP",   "RING_FINGER_TIP")],
+            'PINKY':    [("WRIST", "PINKY_MCP",         "PINKY_TIP")],
         }
 
         # Define angle thresholds (optional)
@@ -42,12 +45,13 @@ class FingerDataProcessor:
             self.joint_angle_thresholds = angle_thresholds
         else:
             self.joint_angle_thresholds = {
-                'THUMB': (132.5, 157.5),
-                'INDEX': (25, 165),
-                'MIDDLE': (15, 167.5),
-                'RING': (15, 167.5),
-                'PINKY': (15, 167.5)
+                'THUMB':    (132.5, 157.5),
+                'INDEX':    (60, 160),
+                'MIDDLE':   (40, 167.5),
+                'RING':     (30, 167.5),
+                'PINKY':    (30, 167.5)
             }
+            
 
     @staticmethod
     def calculate_angle(a, b, c):
@@ -78,6 +82,32 @@ class FingerDataProcessor:
         cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
         radians = np.arccos(cosine_angle)
         return np.degrees(radians)
+    
+    def get_percentage_angles(self, angles_dict):
+        """
+        Calculate the percentage of angles within the threshold for each finger.
+
+        Parameters:
+            angles_dict (dict): A dictionary with finger names as keys and their corresponding angles as values.
+
+        Returns:
+            dict: A dictionary with finger names as keys and their corresponding percentage of angles within the threshold.
+        """
+        percentage_dict = {}
+        
+        for finger, angles in angles_dict.items():
+            if finger in self.joint_angle_thresholds:
+                min_angle, max_angle = self.joint_angle_thresholds[finger]
+                if np.isnan(angles):
+                    percentage_dict[finger] = np.nan
+                else:
+                    percentage = (min(max_angle, max(min_angle, angles)) - min_angle) / (max_angle - min_angle) * 100
+                    percentage_dict[finger] = percentage
+            else:
+                logging.warning(f"No angle thresholds defined for finger {finger}.")
+                percentage_dict[finger] = np.nan
+        
+        return percentage_dict
 
     def get_calculated_angles(self, landmarks):
         """
@@ -101,20 +131,16 @@ class FingerDataProcessor:
                 idx_b = self.hand_landmarks_idx_dict.get(name_b)
                 idx_c = self.hand_landmarks_idx_dict.get(name_c)
                 
-                # Check if all landmarks exist
+                # Ensure all landmarks exist
                 if idx_a is None or idx_b is None or idx_c is None:
-                    print(f"Warning: Landmark names {name_a}, {name_b}, or {name_c} not found.")
+                    logging.warning(f"Landmark names {name_a}, {name_b}, or {name_c} not found.")
                     angle = np.nan
                 else:
                     a = landmarks[idx_a]
                     b = landmarks[idx_b]
                     c = landmarks[idx_c]
                     
-                    # Check for NaN values in the landmarks
-                    if any(np.isnan(coord) for coord in a + b + c):
-                        angle = np.nan  # Assign NaN if any coordinate is missing
-                    else:
-                        angle = self.calculate_angle(a, b, c)
+                    angle = self.calculate_angle(a, b, c)
                 angles.append(angle)
             
             # Average angle for the finger (useful if multiple joints per finger)
@@ -128,7 +154,7 @@ class FingerDataProcessor:
 
     def load_and_process_csv(self, csv_file_path):
         """
-        Load the CSV file and process each row to calculate finger angles.
+        Load the CSV file, remove rows with any NaN values, and process each row to calculate finger angles.
 
         Parameters:
             csv_file_path (str): Path to the CSV file.
@@ -136,71 +162,51 @@ class FingerDataProcessor:
         Returns:
             pd.DataFrame: A DataFrame containing timestamps and corresponding finger angles.
         """
-        # Read the CSV file
         try:
-            df = pd.read_csv(csv_file_path)
+            # Read only required columns to optimize memory usage
+            df = pd.read_csv(csv_file_path, usecols=lambda col: col.startswith('landmark_') or col == 'timestamp')
         except FileNotFoundError:
-            print(f"Error: File '{csv_file_path}' not found.")
+            logging.error(f"File '{csv_file_path}' not found.")
             return pd.DataFrame()
         except pd.errors.EmptyDataError:
-            print(f"Error: File '{csv_file_path}' is empty.")
+            logging.error(f"File '{csv_file_path}' is empty.")
             return pd.DataFrame()
         except pd.errors.ParserError as e:
-            print(f"Error parsing CSV file: {e}")
+            logging.error(f"Error parsing CSV file: {e}")
             return pd.DataFrame()
         
-        # Ensure all required columns are present
+        # Define expected columns
         expected_columns = ['timestamp'] + [f'landmark_{i}_{coord}' for i in range(21) for coord in ['x', 'y', 'z']]
         missing_columns = set(expected_columns) - set(df.columns)
         if missing_columns:
-            print(f"Error: The following required columns are missing in the CSV: {missing_columns}")
+            logging.error(f"The following required columns are missing in the CSV: {missing_columns}")
             return pd.DataFrame()
         
-        processed_data = []
-        skipped_rows = 0
+        # Clean the DataFrame by dropping rows with any NaN in expected columns
+        df_clean = df.dropna(subset=expected_columns).reset_index(drop=True)
+        skipped_rows = len(df) - len(df_clean)
         total_rows = len(df)
-        
-        # Iterate over each row in the DataFrame
-        for index, row in df.iterrows():
-            timestamp = row['timestamp']
-            landmarks = []
-            row_has_nan = False  # Flag to indicate if the row has any NaN
-            
-            # Extract landmarks from the row
-            for i in range(21):
-                x = row.get(f'landmark_{i}_x', np.nan)
-                y = row.get(f'landmark_{i}_y', np.nan)
-                z = row.get(f'landmark_{i}_z', np.nan)
-                
-                # Check if any coordinate is NaN
-                if pd.isna(x) or pd.isna(y) or pd.isna(z):
-                    row_has_nan = True
-                    break  # Exit the landmark loop immediately
-                else:
-                    landmarks.append((x, y, z))
-            
-            if row_has_nan:
-                skipped_rows += 1
-                continue  # Skip processing this row entirely
-            
-            # Calculate angles for the current set of landmarks
-            angles = self.get_calculated_angles(landmarks)
-            
-            # Check if any angle is NaN (optional, based on calculation success)
-            if any(np.isnan(angle) for angle in angles.values()):
-                skipped_rows += 1
-                continue  # Skip this row if any angle calculation failed
-            
-            # Create a dictionary entry with timestamp and angles
-            data_entry = {'timestamp': timestamp}
-            data_entry.update(angles)
-            processed_data.append(data_entry)
-        
-        print(f"Processed {total_rows} rows.")
-        print(f"Skipped {skipped_rows} rows due to missing or invalid data.")
-        
-        # Convert the list of dictionaries to a pandas DataFrame
-        processed_df = pd.DataFrame(processed_data)
+
+        logging.info(f"Total rows before cleaning: {total_rows}")
+        logging.info(f"Rows with NaN values removed: {skipped_rows}")
+
+        if df_clean.empty:
+            logging.warning("No valid data available after removing rows with NaN values.")
+            return pd.DataFrame()
+
+        # Define a function to process each row
+        def process_row(row):
+            # Extract landmarks as a list of tuples (x, y, z)
+            landmarks = [tuple(row[f'landmark_{i}_{coord}'] for coord in ['x', 'y', 'z']) for i in range(len(self.hand_landmarks))]
+            return self.get_calculated_angles(landmarks)
+
+        # Apply the function to each row
+        angles_df = df_clean.apply(process_row, axis=1, result_type='expand')
+
+        # Combine the timestamp with the angles
+        processed_df = pd.concat([df_clean[['timestamp']].reset_index(drop=True), angles_df], axis=1)
+
+        logging.info(f"Processed {len(df_clean)} rows after removing NaNs.")
         
         return processed_df
 
@@ -213,20 +219,21 @@ class FingerDataProcessor:
             output_csv_path (str): Path to the output CSV file.
         """
         if processed_data.empty:
-            print("No data to save.")
+            logging.warning("No data to save.")
             return
         
         try:
             processed_data.to_csv(output_csv_path, index=False)
-            print(f"Processed data saved to '{output_csv_path}'.")
+            logging.info(f"Processed data saved to '{output_csv_path}'.")
         except Exception as e:
-            print(f"Error saving processed data: {e}")
+            logging.error(f"Error saving processed data: {e}")
 
 # Example Usage
 if __name__ == "__main__":
     # Path to your CSV file
-    csv_file = 'EMG Hand Data 20241031_002827/fingers.csv'  # Replace with your actual CSV file path
-    output_csv = 'EMG Hand Data 20241031_002827/finger_angles.csv'  # Desired output file path
+    folder = 'EMG Hand Data 20241030_233323'
+    csv_file = f'{folder}/fingers.csv'  # Replace with your actual CSV file path
+    output_csv = f'{folder}/finger_angles.csv'  # Desired output file path
 
     # Initialize the processor
     processor = FingerDataProcessor()

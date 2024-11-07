@@ -4,3 +4,5 @@ __pycache__/
 .conda/
 .venv/
 .vscode/
+# ignore all camera_frames folders
+camera_frames/

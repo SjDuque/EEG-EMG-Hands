@@ -35,15 +35,60 @@ AUGMENTATIONS = {
     "add_gaussian_noise": True,
     "scale_time_series": True
 }
-AGGREGATE_FINGERS = [['pinky', 'ring'], ['middle', 'index'], 'thumb']
+AGGREGATE_FINGERS = [
+    ['pinky', 'ring'], 
+    ['middle', 'index'], 
+    'thumb'
+]
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-# Load and preprocess data
-def load_and_preprocess_data(hand_file: str, emg_file: str, sampling_rate: int = None, selected_channels: list = None) -> tuple:
-    sampling_rate = sampling_rate or SAMPLING_RATE
-    selected_channels = selected_channels or SELECTED_CHANNELS
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+import logging
+
+# Set defaults that can be overridden by passing parameters
+DEFAULT_SAMPLING_RATE = 250
+DEFAULT_SELECTED_CHANNELS = [1, 2, 3, 4]
+DEFAULT_JOINT_ANGLE_THRESHOLDS = {
+    'thumb': (132.5, 157.5),
+    'index': (25, 165),
+    'middle': (15, 167.5),
+    'ring': (15, 167.5),
+    'pinky': (15, 167.5)
+}
+
+# Load and preprocess data function
+def load_and_preprocess_data(
+    hand_file: str, 
+    emg_file: str, 
+    scaler_emg: MinMaxScaler = None, 
+    joint_angle_thresholds: dict = None, 
+    selected_channels: list = None,
+    sampling_rate: int = None
+) -> tuple:
+    """
+    Loads and preprocesses EMG and hand data with optional parameters.
+
+    Args:
+        hand_file (str): Path to the hand data CSV file.
+        emg_file (str): Path to the EMG data CSV file.
+        scaler_emg (MinMaxScaler, optional): Pre-fitted scaler for EMG data. 
+                                             If None, a new scaler will be fitted.
+        joint_angle_thresholds (dict, optional): Thresholds for calculating joint percentages.
+                                                 If None, defaults are used.
+        selected_channels (list, optional): List of selected EMG channel indices. 
+                                            If None, defaults are used.
+        sampling_rate (int, optional): Sampling rate in Hz. If None, a default is used.
+
+    Returns:
+        tuple: Processed hand and EMG dataframes, and the scaler used for EMG data.
+    """
+    sampling_rate = sampling_rate or DEFAULT_SAMPLING_RATE
+    selected_channels = selected_channels or DEFAULT_SELECTED_CHANNELS
+    joint_angle_thresholds = joint_angle_thresholds or DEFAULT_JOINT_ANGLE_THRESHOLDS
 
     try:
         hand_df = pd.read_csv(hand_file)
@@ -52,28 +97,42 @@ def load_and_preprocess_data(hand_file: str, emg_file: str, sampling_rate: int =
     except FileNotFoundError as e:
         logging.error(f"File not found: {e}")
         print(f"File not found: {e}")
-        return 
+        return None, None, None
 
+    # Sort data by timestamps
     hand_df = hand_df.sort_values('timestamp').reset_index(drop=True)
     emg_df = emg_df.sort_values('timestamp').reset_index(drop=True)
 
+    # Adjust hand_df starting point based on sampling rate and processing delay
     hand_start_index = int(sampling_rate * 1 / 15)
     hand_df = hand_df.iloc[hand_start_index:].reset_index(drop=True)
 
-    for joint, (low, high) in JOINT_ANGLE_THRESHOLDS.items():
+    # Remove rows with NaNs in joint angle columns before calculating percentages
+    angle_columns = [f"{joint}_angle" for joint in joint_angle_thresholds.keys()]
+    hand_df.dropna(subset=angle_columns, inplace=True)
+
+    # Calculate joint angle percentages based on provided or default thresholds
+    for joint, (low, high) in joint_angle_thresholds.items():
         angle_column = f"{joint}_angle"
         percent_column = f"{joint}_percent"
         hand_df[percent_column] = hand_df[angle_column].apply(lambda x: (x - low) / (high - low))
 
-    emg_channels = [f'emg_channel_{i}' for i in selected_channels]
-    emg_df_selected = emg_df[emg_channels].copy()
-    emg_timestamps = emg_df['timestamp'].reset_index(drop=True)
+    # Select specified EMG channels
+    emg_columns = [f'emg_channel_{i}' for i in selected_channels]
+    emg_df_selected = emg_df[emg_columns].copy()
+    emg_df_selected.dropna(inplace=True)
 
-    scaler_emg = MinMaxScaler()
-    emg_df_scaled = pd.DataFrame(scaler_emg.fit_transform(emg_df_selected), columns=emg_channels)
-    emg_df_final = pd.concat([emg_timestamps, emg_df_scaled], axis=1)
+    # If no scaler is provided, fit a new one; otherwise, use the provided scaler
+    if scaler_emg is None:
+        scaler_emg = MinMaxScaler()
+        emg_df_scaled = pd.DataFrame(scaler_emg.fit_transform(emg_df_selected), columns=emg_columns)
+    else:
+        emg_df_scaled = pd.DataFrame(scaler_emg.transform(emg_df_selected), columns=emg_columns)
 
-    return hand_df, emg_df_final, scaler_emg
+    # Include timestamps in the scaled data
+    emg_df_scaled['timestamp'] = emg_df['timestamp'].reset_index(drop=True)
+
+    return hand_df, emg_df_scaled, scaler_emg
 
 # Data augmentation functions
 def magnitude_warp(x: np.ndarray, sigma: float = 0.2, knot: int = 4) -> np.ndarray:
@@ -208,28 +267,43 @@ def create_aggregated_binary_frames(
 
 # Function to save the model and preprocessing information
 def save_model_and_preprocessing(
-    model, scaler_emg, best_thresholds, frame_size_ms: int = None, sampling_rate: int = None
+    model,
+    scaler_emg,
+    feature_scaler,
+    frame_size_ms: int = None,
+    sampling_rate: int = None,
+    aggregrate_method: list = None
 ):
     frame_size_ms = frame_size_ms or FRAME_SIZE_MS
     sampling_rate = sampling_rate or SAMPLING_RATE
+    aggregrate_method = aggregrate_method or AGGREGATE_FINGERS
 
     now = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     folder_name = f"EMG_Model_{now}"
     os.makedirs(folder_name, exist_ok=True)
 
+    # Save the model
     model_file = os.path.join(folder_name, 'emg_lstm_model.keras')
     model.save(model_file)
     print(f"Model saved to {model_file}")
 
-    best_thresholds_float = [float(threshold) for threshold in best_thresholds]
+    # Save the EMG scaler using joblib
+    scaler_emg_file = os.path.join(folder_name, 'scaler_emg.joblib')
+    joblib.dump(scaler_emg, scaler_emg_file)
+    print(f"EMG scaler saved to {scaler_emg_file}")
 
+    # Save the feature scaler using joblib
+    feature_scaler_file = os.path.join(folder_name, 'feature_scaler.joblib')
+    joblib.dump(feature_scaler, feature_scaler_file)
+    print(f"Feature scaler saved to {feature_scaler_file}")
+
+    # Save preprocessing info
     preprocessing_info = {
-        'scaler_emg_min': scaler_emg.min_.tolist(),
-        'scaler_emg_scale': scaler_emg.scale_.tolist(),
         'frame_size_ms': frame_size_ms,
         'sampling_rate': sampling_rate,
-        'best_thresholds': best_thresholds_float,
         'joint_angle_thresholds': JOINT_ANGLE_THRESHOLDS,
+        'closed_thresholds': CLOSED_THRESHOLDS,
+        'aggregrate_method': aggregrate_method,
         'augmentations': AUGMENTATIONS
     }
 
