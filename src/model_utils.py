@@ -259,6 +259,11 @@ def build_cnn_model_stacked_channels(input_shape, output_dim, class_weights=None
     # Reshape input to add a channel dimension for 2D convolutions
     x = tf.keras.layers.Reshape((*input_shape, 1))(inputs)
     
+    x = Conv2D(filters=16, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 1))(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.5)(x)
+    
     x = Conv2D(filters=32, kernel_size=(3, input_shape[1]), activation='relu', padding='same')(x)
     x = MaxPooling2D(pool_size=(2, 1))(x)
     x = BatchNormalization()(x)
@@ -290,7 +295,7 @@ def build_cnn_model_stacked_channels(input_shape, output_dim, class_weights=None
     # x = Dropout(0.5)(x)
     
     x = Flatten()(x)
-    # x = Dense(64, activation='relu')(x)
+    x = Dense(64, activation='relu')(x)
     x = Dropout(0.5)(x)
     outputs = Dense(output_dim, activation='sigmoid')(x)
     model = Model(inputs=inputs, outputs=outputs)
