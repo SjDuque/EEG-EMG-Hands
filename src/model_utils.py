@@ -4,17 +4,73 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
-import joblib
-import os
-import logging
+from scipy.signal import resample, butter, filtfilt
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import backend as K
 from tensorflow.keras.losses import Loss
-from tensorflow.keras.utils import register_keras_serializable
+from tensorflow.keras.utils import register_keras_serializable, Sequence
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, BatchNormalization, Dropout, Flatten, Dense, GaussianNoise
+import logging
 
-# model_utils.py
-from scipy.signal import resample
+class AugmentedDataGenerator(Sequence):
+    def __init__(self, X, y, batch_size=32, shuffle=True, 
+                 add_noise=False, noise_stddev=0.05,
+                 apply_time_warp=False, max_warp=0.2,
+                 apply_magnitude_scaling=False, scale_range=(0.8, 1.2),):
+        super().__init__()
+        self.X = X
+        self.y = y
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.add_noise = add_noise
+        self.noise_stddev = noise_stddev
+        self.apply_time_warp = apply_time_warp
+        self.max_warp = max_warp
+        self.apply_magnitude_scaling = apply_magnitude_scaling
+        self.scale_range = scale_range
+        self.indices = np.arange(len(self.X))
+        self.on_epoch_end()
+    
+    def __len__(self):
+        return int(np.ceil(len(self.X) / self.batch_size))
+    
+    def __getitem__(self, index):
+        batch_indices = self.indices[index * self.batch_size:(index + 1) * self.batch_size]
+        X_batch = self.X[batch_indices].copy()
+        y_batch = self.y[batch_indices]
+        
+        if self.add_noise or self.apply_time_warp or self.apply_magnitude_scaling or self.apply_bandpass_filter:
+            X_batch = self._apply_augmentations(X_batch)
+        
+        return X_batch, y_batch
+    
+    def on_epoch_end(self):
+        if self.shuffle:
+            np.random.shuffle(self.indices)
+    
+    def _apply_augmentations(self, X_batch):
+        for i in range(X_batch.shape[0]):
+            if self.add_noise:
+                X_batch[i] += np.random.normal(0, self.noise_stddev, X_batch[i].shape)
+            
+            if self.apply_time_warp:
+                X_batch[i] = self._time_warp(X_batch[i])
+            
+            if self.apply_magnitude_scaling:
+                X_batch[i] *= np.random.uniform(self.scale_range[0], self.scale_range[1])
+        
+        return X_batch
+    
+    def _time_warp(self, sequence):
+        num_frames, num_channels = sequence.shape
+        warp_factor = np.random.uniform(1 - self.max_warp, 1 + self.max_warp)
+        warped_num_frames = max(int(num_frames * warp_factor), 2)
+        warped_sequence = resample(sequence, warped_num_frames, axis=0)
+        warped_sequence = resample(warped_sequence, num_frames, axis=0)
+        return warped_sequence
 
 def resample_dataframe_signal(df, desired_rate, time_column='timestamp'):
     # Ensure the time column is sorted
@@ -24,12 +80,8 @@ def resample_dataframe_signal(df, desired_rate, time_column='timestamp'):
     data_columns = df.columns.drop(time_column)
     df = df.dropna(subset=data_columns, how='all').reset_index(drop=True)
     
-    # Original sampling rate
     time_values = df[time_column].values
-    start_time = time_values[0]
-    end_time = time_values[-1]
-    original_rate = 1.0 / np.mean(np.diff(time_values))
-    
+    start_time, end_time = time_values[0], time_values[-1]
     num_samples = int((end_time - start_time) * desired_rate)
     new_time_values = np.linspace(start_time, end_time, num=num_samples)
     
@@ -38,75 +90,53 @@ def resample_dataframe_signal(df, desired_rate, time_column='timestamp'):
     for col in data_columns:
         if df[col].isna().all():
             resampled_data[col] = np.full_like(new_time_values, np.nan, dtype=np.float64)
-            continue
-        # Interpolate using resample, ignoring NaNs
-        signal = df[col].interpolate().fillna(method='bfill').fillna(method='ffill').values
-        resampled_signal = resample(signal, num_samples)
-        resampled_data[col] = resampled_signal
+        else:
+            signal = df[col].interpolate(method='linear').values
+            resampled_signal = resample(signal, num_samples)
+            resampled_data[col] = resampled_signal
     
-    resampled_df = pd.DataFrame(resampled_data)
-    return resampled_df
-
+    return pd.DataFrame(resampled_data)
 
 def resample_dataframe(df, desired_rate, time_column='timestamp', method='linear'):
     """
-    Resample the DataFrame to the desired sampling rate without creating data where it doesn't exist.
-    
+    Resample the DataFrame to the desired sampling rate.
+
     Parameters:
-    - df: pandas DataFrame containing the data to resample.
-    - desired_rate: Desired sampling rate in Hz.
-    - time_column: Name of the time column in df.
-    - method: Interpolation method ('linear', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic', etc.)
-    
+    - df: pandas DataFrame with a time column.
+    - desired_rate: Target sampling rate in Hz.
+    - time_column: Name of the time column.
+    - method: Interpolation method.
+
     Returns:
-    - resampled_df: DataFrame resampled to the desired rate.
+    - Resampled DataFrame.
     """
-    # Ensure the time column is sorted
+    # Sort and clean the DataFrame
     df = df.sort_values(by=time_column).reset_index(drop=True)
-    
-    # Remove rows where all data columns are NaN
     data_columns = df.columns.drop(time_column)
     df = df.dropna(subset=data_columns, how='all').reset_index(drop=True)
     
-    # Get the time values where data is available
     time_values = df[time_column].values
-    
-    # Determine the new time values
-    start_time = time_values[0]
-    end_time = time_values[-1]
-    
-    # Generate new time values at desired_rate
+    start_time, end_time = time_values[0], time_values[-1]
     sampling_interval = 1.0 / desired_rate
     new_time_values = np.arange(start_time, end_time, sampling_interval)
-    
-    # Interpolate data columns onto new time grid
-    from scipy.interpolate import interp1d
     
     resampled_data = {time_column: new_time_values}
     
     for col in data_columns:
-        # Mask NaN values
-        valid_mask = ~np.isnan(df[col].values)
-        if np.sum(valid_mask) < 2:
-            # Not enough data to interpolate, fill with NaN
+        valid = ~np.isnan(df[col].values)
+        if np.sum(valid) < 2:
             resampled_data[col] = np.full_like(new_time_values, np.nan, dtype=np.float64)
             continue
-        
-        # Create interpolation function only with valid data
         interp_func = interp1d(
-            time_values[valid_mask],
-            df[col].values[valid_mask],
+            time_values[valid],
+            df[col].values[valid],
             kind=method,
             bounds_error=False,
-            fill_value=np.nan  # Keep NaN where data is missing
+            fill_value=np.nan
         )
-        # Interpolate onto new time values
         resampled_data[col] = interp_func(new_time_values)
     
-    resampled_df = pd.DataFrame(resampled_data)
-    
-    return resampled_df
-
+    return pd.DataFrame(resampled_data)
 
 def find_nearest_previous_timestamp(emg_timestamps, target_timestamp):
     idx = np.searchsorted(emg_timestamps, target_timestamp, side='right') - 1
@@ -156,19 +186,29 @@ class WeightedBinaryCrossentropy(Loss):
         # Return the mean loss over all classes and samples
         return K.mean(weighted_bce)
 
-def build_cnn_model(input_shape, output_dim, class_weights=None):
-    from tensorflow.keras.models import Model
-    from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, BatchNormalization, Dropout, Flatten, Dense
-
+def build_cnn_model(input_shape, output_dim, class_weights=None, noise_stddev=0.1):
     inputs = Input(shape=input_shape)
+    
+    # Add Gaussian Noise Layer
+    # x = GaussianNoise(noise_stddev)(inputs)  # Adjust noise_stddev as needed
+    
     x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
     x = MaxPooling1D(pool_size=2)(x) 
     x = BatchNormalization()(x)
     x = Dropout(0.5)(x)
     
-    x = Flatten()(x)
-    # x = Dense(16, activation='relu')(x)
+    # x = Conv1D(filters=512, kernel_size=3, activation='relu', padding='same')(inputs)
+    # x = MaxPooling1D(pool_size=2)(x) 
+    # x = BatchNormalization()(x)
     # x = Dropout(0.5)(x)
+    
+    # x = Conv1D(filters=256, kernel_size=3, activation='relu', padding='same')(inputs)
+    # x = MaxPooling1D(pool_size=2)(x) 
+    # x = BatchNormalization()(x)
+    # x = Dropout(0.5)(x)
+    
+    x = Flatten()(x)
+    # x = Dense(512, activation='relu')(x)
     outputs = Dense(output_dim, activation='sigmoid')(x)
     model = Model(inputs=inputs, outputs=outputs)
     

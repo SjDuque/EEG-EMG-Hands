@@ -20,7 +20,8 @@ from model_utils import (
     build_cnn_model,
     plot_learning_curves,
     resample_dataframe,
-    resample_dataframe_signal
+    resample_dataframe_signal,
+    AugmentedDataGenerator
 )
 
 # Configuration Parameters
@@ -29,9 +30,11 @@ FINGER_GROUPS = {
     'Thumb': ['THUMB'],
     'Index': ['INDEX'],
     'Middle': ['MIDDLE'],
-    # 'Ring_Pinky': ['RING', 'PINKY'],
     'Ring': ['RING'],
     'Pinky': ['PINKY']
+    # Add more finger groups as needed
+    # 'Index_Middle': ['INDEX', 'MIDDLE'],
+    # 'Ring_Pinky': ['RING', 'PINKY'],
 }
 
 JOINT_ANGLE_THRESHOLDS = {
@@ -43,7 +46,7 @@ JOINT_ANGLE_THRESHOLDS = {
 }
 
 # New Configuration Parameters for Frame-Based Processing
-NUM_FRAMES = 20  # Number of EMG frames to include before the timestamp
+NUM_FRAMES = 25  # Number of EMG frames to include before the timestamp
 FRAME_STEP = 1   # Step size between frames
 
 # Sampling Rates: Resample EMG and Finger data
@@ -125,7 +128,7 @@ def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_s
         emg_df = resample_dataframe_signal(emg_df, desired_rate=EMG_SAMPLING_RATE)
         logging.info(f"EMG data resampled for session {session_dir}.")
         # Resample Finger data
-        fingers_df = resample_dataframe(fingers_df, desired_rate=FINGER_SAMPLING_RATE)
+        fingers_df = resample_dataframe(fingers_df, desired_rate=FINGER_SAMPLING_RATE, method='linear')
         logging.info(f"Finger data resampled for session {session_dir}.")
         
         expected_emg_columns = ['timestamp'] + emg_channels
@@ -232,7 +235,7 @@ def main():
     # Define session directories:
     # EMG Hand Data 20241030_223524 EMG Hand Data 20241030_224059 EMG Hand Data 20241030_224413 EMG Hand Data 20241030_225347 EMG Hand Data 20241030_231057 EMG Hand Data 20241030_232021 EMG Hand Data 20241030_233323 EMG Hand Data 20241030_234704 EMG Hand Data 20241030_235851 EMG Hand Data 20241031_001704 EMG Hand Data 20241031_002827
     training_session_dirs = [
-        'EMG Hand Data 20241030_223524',
+        # 'EMG Hand Data 20241030_223524',
         'EMG Hand Data 20241030_224059',
         'EMG Hand Data 20241030_224413',
         'EMG Hand Data 20241030_225347',
@@ -241,11 +244,12 @@ def main():
         'EMG Hand Data 20241030_233323',
         'EMG Hand Data 20241030_234704',
         'EMG Hand Data 20241030_235851',
+        'EMG Hand Data 20241031_002827'
         # Add more training session directories as needed
     ]
 
     validation_session_dirs = [
-        'EMG Hand Data 20241031_002827',
+        'EMG Hand Data 20241030_223524',
         # Add more validation session directories as needed
     ]
 
@@ -329,12 +333,35 @@ def main():
     logging.info("CNN Model built.")
 
     # Define callbacks
-    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=25, restore_best_weights=True)
-    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
-
+    early_stopping = EarlyStopping(monitor='val_binary_accuracy', patience=50, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=1e-6)
+    
+    batch_size = 1024
+    
+    # Create training and validation generators
+    train_generator = AugmentedDataGenerator(
+        X_train_scaled, y_train_full, 
+        batch_size=batch_size, 
+        shuffle=True,
+        add_noise=True, 
+        noise_stddev=0.25,
+        apply_time_warp=True, 
+        max_warp=0.25,
+        apply_magnitude_scaling=True, 
+        scale_range=(0.25, 1.25),
+    )
+    
+    val_generator = AugmentedDataGenerator(
+        X_val_scaled, y_val, 
+        batch_size=batch_size, 
+        shuffle=False,
+        add_noise=False, 
+        apply_time_warp=False, 
+        apply_magnitude_scaling=False,
+    )
     # Train the model
     history = model.fit(
-        X_train_scaled, y_train_full,
+        train_generator,
         epochs=200,  # Increased epochs for CNN
         batch_size=1024,  # Adjusted batch size
         validation_data=(X_val_scaled, y_val),
