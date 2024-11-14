@@ -9,7 +9,15 @@ class FingerDataProcessor:
     A class to process hand landmark data and calculate finger angles from a CSV file.
     """
 
-    def __init__(self, angle_thresholds=None):
+    def __init__(self, 
+                 angle_thresholds={
+                    'thumb_mcp':    (132.5, 157.5),
+                    'index_mcp':    (60, 160),
+                    'middle_mcp':   (40, 167.5),
+                    'ring_mcp':     (30, 167.5),
+                    'pinky_mcp':    (30, 167.5)
+                 }
+                ):
         """
         Initialize the FingerDataProcessor with optional angle thresholds.
 
@@ -23,9 +31,6 @@ class FingerDataProcessor:
         # Initialize MediaPipe HandLandmark
         self.HandLandmark = mp.solutions.hands.HandLandmark
 
-        # Define fingers
-        self.fingers = ['THUMB', 'INDEX', 'MIDDLE', 'RING', 'PINKY']
-
         # Generate hand_landmarks list from HandLandmark enum
         self.hand_landmarks = [landmark.name for landmark in self.HandLandmark]
 
@@ -34,24 +39,15 @@ class FingerDataProcessor:
 
         # Define joint sets for each finger using landmark names
         self.joint_sets = {
-            'THUMB':    [("WRIST", "THUMB_MCP",         "THUMB_TIP")],
-            'INDEX':    [("WRIST", "INDEX_FINGER_MCP",  "INDEX_FINGER_TIP")],
-            'MIDDLE':   [("WRIST", "MIDDLE_FINGER_MCP", "MIDDLE_FINGER_TIP")],
-            'RING':     [("WRIST", "RING_FINGER_MCP",   "RING_FINGER_TIP")],
-            'PINKY':    [("WRIST", "PINKY_MCP",         "PINKY_TIP")],
+            'thumb_mcp':    [("WRIST", "THUMB_MCP",         "THUMB_TIP")],
+            'index_mcp':    [("WRIST", "INDEX_FINGER_MCP",  "INDEX_FINGER_TIP")],
+            'middle_mcp':   [("WRIST", "MIDDLE_FINGER_MCP", "MIDDLE_FINGER_TIP")],
+            'ring_mcp':     [("WRIST", "RING_FINGER_MCP",   "RING_FINGER_TIP")],
+            'pinky_mcp':    [("WRIST", "PINKY_MCP",         "PINKY_TIP")],
         }
-
-        # Define angle thresholds (optional)
-        if angle_thresholds is not None:
-            self.joint_angle_thresholds = angle_thresholds
-        else:
-            self.joint_angle_thresholds = {
-                'THUMB':    (132.5, 157.5),
-                'INDEX':    (60, 160),
-                'MIDDLE':   (40, 167.5),
-                'RING':     (30, 167.5),
-                'PINKY':    (30, 167.5)
-            }
+        
+        # Define angle thresholds for each finger
+        self.angle_thesholds = angle_thresholds
             
 
     @staticmethod
@@ -97,12 +93,13 @@ class FingerDataProcessor:
         percentage_dict = {}
         
         for finger, angles in angles_dict.items():
-            if finger in self.joint_angle_thresholds:
-                min_angle, max_angle = self.joint_angle_thresholds[finger]
+            if finger in self.angle_thesholds:
+                min_angle, max_angle = self.angle_thesholds[finger]
                 if np.isnan(angles):
                     percentage_dict[finger] = np.nan
                 else:
-                    percentage = (min(max_angle, max(min_angle, angles)) - min_angle) / (max_angle - min_angle) * 100
+                    percentage = (min(max_angle, max(min_angle, angles)) - min_angle) / (max_angle - min_angle)
+                    np.clip(percentage, 0, 1)
                     percentage_dict[finger] = percentage
             else:
                 logging.warning(f"No angle thresholds defined for finger {finger}.")
@@ -194,7 +191,12 @@ class FingerDataProcessor:
         def process_row(row):
             # Extract landmarks as a list of tuples (x, y, z)
             landmarks = [tuple(row.get(f'landmark_{i}_{coord}', np.nan) for coord in ['x', 'y', 'z']) for i in range(len(self.hand_landmarks))]
-            return self.get_calculated_angles(landmarks)
+            # Calculate angles
+            angles = self.get_calculated_angles(landmarks)
+            # Calculate percentage of angles within the threshold
+            percentage_angles = self.get_percentage_angles(angles)
+
+            return percentage_angles
 
         # Apply the function to each row
         angles_df = df.apply(process_row, axis=1, result_type='expand')
