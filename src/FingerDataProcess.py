@@ -3,6 +3,7 @@ import pandas as pd
 import mediapipe as mp
 import logging
 import os
+import warnings
 
 class FingerDataProcessor:
     """
@@ -47,112 +48,109 @@ class FingerDataProcessor:
         }
         
         # Define angle thresholds for each finger
-        self.angle_thesholds = angle_thresholds
-            
+        self.angle_thresholds = angle_thresholds
 
-    @staticmethod
-    def calculate_angle(a, b, c):
-        """
-        Calculate the angle between three points a, b, and c in degrees.
-
-        Parameters:
-            a (tuple): (x, y, z) coordinates of point a.
-            b (tuple): (x, y, z) coordinates of point b (vertex).
-            c (tuple): (x, y, z) coordinates of point c.
-
-        Returns:
-            float: The angle in degrees. Returns np.nan if calculation is not possible.
-        """
-        a, b, c = np.array(a), np.array(b), np.array(c)
-        ba = a - b
-        bc = c - b
-        norm_ba = np.linalg.norm(ba)
-        norm_bc = np.linalg.norm(bc)
-        
-        if norm_ba == 0 or norm_bc == 0:
-            # Avoid division by zero
-            return np.nan
-        
-        # Compute the cosine of the angle using dot product
-        cosine_angle = np.dot(ba, bc) / (norm_ba * norm_bc)
-        # Handle potential numerical issues
-        cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
-        radians = np.arccos(cosine_angle)
-        return np.degrees(radians)
-    
-    def get_percentage_angles(self, angles_dict):
-        """
-        Calculate the percentage of angles within the threshold for each finger.
-
-        Parameters:
-            angles_dict (dict): A dictionary with finger names as keys and their corresponding angles as values.
-
-        Returns:
-            dict: A dictionary with finger names as keys and their corresponding percentage of angles within the threshold.
-        """
-        percentage_dict = {}
-        
-        for finger, angles in angles_dict.items():
-            if finger in self.angle_thesholds:
-                min_angle, max_angle = self.angle_thesholds[finger]
-                if np.isnan(angles):
-                    percentage_dict[finger] = np.nan
-                else:
-                    percentage = (min(max_angle, max(min_angle, angles)) - min_angle) / (max_angle - min_angle)
-                    np.clip(percentage, 0, 1)
-                    percentage_dict[finger] = percentage
-            else:
-                logging.warning(f"No angle thresholds defined for finger {finger}.")
-                percentage_dict[finger] = np.nan
-        
-        return percentage_dict
-
-    def get_calculated_angles(self, landmarks):
-        """
-        Calculate the angles for each finger based on hand landmarks.
-
-        Parameters:
-            landmarks (list of tuples): List containing (x, y, z) coordinates for each landmark.
-
-        Returns:
-            dict: A dictionary with finger names as keys and their corresponding angles as values.
-        """
-        angles_dict = {}
-        
+        # Precompute the indices for each joint set
+        self.precomputed_joints = {}
         for finger, joints in self.joint_sets.items():
-            angles = []
+            self.precomputed_joints[finger] = []
             for j in joints:
                 name_a, name_b, name_c = j
-                
-                # Map landmark names to indices
                 idx_a = self.hand_landmarks_idx_dict.get(name_a)
                 idx_b = self.hand_landmarks_idx_dict.get(name_b)
                 idx_c = self.hand_landmarks_idx_dict.get(name_c)
-                
-                # Ensure all landmarks exist
                 if idx_a is None or idx_b is None or idx_c is None:
                     logging.warning(f"Landmark names {name_a}, {name_b}, or {name_c} not found.")
-                    angle = np.nan
+                    self.precomputed_joints[finger].append((np.nan, np.nan, np.nan))
                 else:
-                    a = landmarks[idx_a]
-                    b = landmarks[idx_b]
-                    c = landmarks[idx_c]
-                    
-                    angle = self.calculate_angle(a, b, c)
-                angles.append(angle)
-            
-            # Average angle for the finger (useful if multiple joints per finger)
-            # If all angles are NaN, the mean will be NaN
-            if any(not np.isnan(angle) for angle in angles):
-                angles_dict[finger] = np.nanmean(angles)
+                    self.precomputed_joints[finger].append((idx_a, idx_b, idx_c))
+
+    @staticmethod
+    def calculate_angle_vectorized(a, b, c):
+        """
+        Calculate the angle between three points a, b, and c in degrees using vectorized operations.
+
+        Parameters:
+            a (np.ndarray): Array of shape (n, 3) for point a.
+            b (np.ndarray): Array of shape (n, 3) for point b (vertex).
+            c (np.ndarray): Array of shape (n, 3) for point c.
+
+        Returns:
+            np.ndarray: Array of angles in degrees. Returns np.nan where calculation is not possible.
+        """
+        ba = a - b
+        bc = c - b
+        norm_ba = np.linalg.norm(ba, axis=1)
+        norm_bc = np.linalg.norm(bc, axis=1)
+
+        # Avoid division by zero
+        valid = (norm_ba != 0) & (norm_bc != 0)
+        cosine_angle = np.einsum('ij,ij->i', ba, bc) / (norm_ba * norm_bc)
+        cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
+        angles = np.degrees(np.arccos(cosine_angle))
+        angles[~valid] = np.nan
+        return angles
+
+    def get_percentage_angles_vectorized(self, angles_dict):
+        """
+        Calculate the percentage of angles within the threshold for each finger using vectorized operations.
+
+        Parameters:
+            angles_dict (dict): A dictionary with finger names as keys and their corresponding angles as np.ndarray.
+
+        Returns:
+            pd.DataFrame: DataFrame with percentage of angles within the threshold for each finger.
+        """
+        percentage_data = {}
+        for finger, angles in angles_dict.items():
+            if finger in self.angle_thresholds:
+                min_angle, max_angle = self.angle_thresholds[finger]
+                with np.errstate(invalid='ignore'):
+                    percentage = (angles - min_angle) / (max_angle - min_angle)
+                    percentage = np.clip(percentage, 0, 1)
+                percentage_data[finger] = percentage
             else:
-                angles_dict[finger] = np.nan
-        
+                logging.warning(f"No angle thresholds defined for finger {finger}.")
+                percentage_data[finger] = np.full_like(next(iter(angles_dict.values())), np.nan)
+        return pd.DataFrame(percentage_data)
+
+    def get_calculated_angles_vectorized(self, landmarks_array):
+        """
+        Calculate the angles for each finger based on hand landmarks using vectorized operations.
+
+        Parameters:
+            landmarks_array (np.ndarray): Array of shape (n, 21, 3) containing (x, y, z) coordinates.
+
+        Returns:
+            dict: A dictionary with finger names as keys and their corresponding angles as np.ndarray.
+        """
+        angles_dict = {}
+        for finger, joints in self.precomputed_joints.items():
+            angles = []
+            for idx_a, idx_b, idx_c in joints:
+                if np.isnan(idx_a) or np.isnan(idx_b) or np.isnan(idx_c):
+                    angles.append(np.full(landmarks_array.shape[0], np.nan))
+                else:
+                    a = landmarks_array[:, int(idx_a), :]
+                    b = landmarks_array[:, int(idx_b), :]
+                    c = landmarks_array[:, int(idx_c), :]
+                    angle = self.calculate_angle_vectorized(a, b, c)
+                    angles.append(angle)
+            # Average angle for the finger
+            if angles:
+                angles_stack = np.vstack(angles)
+                # Ignore 'RuntimeWarning: Mean of empty slice' when all angles are NaN
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    angles_mean = np.nanmean(angles_stack, axis=0)
+                angles_dict[finger] = angles_mean
+            else:
+                angles_dict[finger] = np.full(landmarks_array.shape[0], np.nan)
         return angles_dict
 
     def load_and_process_csv(self, csv_file_path):
         """
-        Load the CSV file and process each row to calculate finger angles.
+        Load the CSV file and process to calculate finger angles using vectorized operations.
 
         Parameters:
             csv_file_path (str): Path to the CSV file.
@@ -161,7 +159,7 @@ class FingerDataProcessor:
             pd.DataFrame: A DataFrame containing timestamps and corresponding finger angles.
         """
         try:
-            # Read only required columns to optimize memory usage
+            # Read the CSV file
             df = pd.read_csv(csv_file_path, usecols=lambda col: col.startswith('landmark_') or col == 'timestamp')
         except FileNotFoundError:
             logging.error(f"File '{csv_file_path}' not found.")
@@ -172,14 +170,14 @@ class FingerDataProcessor:
         except pd.errors.ParserError as e:
             logging.error(f"Error parsing CSV file: {e}")
             return pd.DataFrame()
-        
+
         # Define expected columns
         expected_columns = ['timestamp'] + [f'landmark_{i}_{coord}' for i in range(21) for coord in ['x', 'y', 'z']]
         missing_columns = set(expected_columns) - set(df.columns)
         if missing_columns:
             logging.error(f"The following required columns are missing in the CSV: {missing_columns}")
             return pd.DataFrame()
-        
+
         total_rows = len(df)
         logging.info(f"Total rows: {total_rows}")
 
@@ -187,22 +185,18 @@ class FingerDataProcessor:
             logging.warning("No data available in the CSV file.")
             return pd.DataFrame()
 
-        # Define a function to process each row
-        def process_row(row):
-            # Extract landmarks as a list of tuples (x, y, z)
-            landmarks = [tuple(row.get(f'landmark_{i}_{coord}', np.nan) for coord in ['x', 'y', 'z']) for i in range(len(self.hand_landmarks))]
-            # Calculate angles
-            angles = self.get_calculated_angles(landmarks)
-            # Calculate percentage of angles within the threshold
-            percentage_angles = self.get_percentage_angles(angles)
+        # Extract landmark data into a NumPy array of shape (n, 21, 3)
+        landmark_cols = [f'landmark_{i}_{coord}' for i in range(21) for coord in ['x', 'y', 'z']]
+        landmarks = df[landmark_cols].to_numpy().reshape(-1, 21, 3)
 
-            return percentage_angles
+        # Calculate angles using vectorized operations
+        angles_dict = self.get_calculated_angles_vectorized(landmarks)
 
-        # Apply the function to each row
-        angles_df = df.apply(process_row, axis=1, result_type='expand')
+        # Calculate percentage angles
+        percentage_df = self.get_percentage_angles_vectorized(angles_dict)
 
-        # Combine the timestamp with the angles
-        processed_df = pd.concat([df[['timestamp']].reset_index(drop=True), angles_df], axis=1)
+        # Combine with timestamp
+        processed_df = pd.concat([df['timestamp'], percentage_df], axis=1)
 
         logging.info(f"Processed {len(processed_df)} rows.")
         
