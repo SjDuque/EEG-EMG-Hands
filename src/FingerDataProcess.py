@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import mediapipe as mp
 import logging
+import os
 
 class FingerDataProcessor:
     """
@@ -154,7 +155,7 @@ class FingerDataProcessor:
 
     def load_and_process_csv(self, csv_file_path):
         """
-        Load the CSV file, remove rows with any NaN values, and process each row to calculate finger angles.
+        Load the CSV file and process each row to calculate finger angles.
 
         Parameters:
             csv_file_path (str): Path to the CSV file.
@@ -182,31 +183,26 @@ class FingerDataProcessor:
             logging.error(f"The following required columns are missing in the CSV: {missing_columns}")
             return pd.DataFrame()
         
-        # Clean the DataFrame by dropping rows with any NaN in expected columns
-        df_clean = df.dropna(subset=expected_columns).reset_index(drop=True)
-        skipped_rows = len(df) - len(df_clean)
         total_rows = len(df)
+        logging.info(f"Total rows: {total_rows}")
 
-        logging.info(f"Total rows before cleaning: {total_rows}")
-        logging.info(f"Rows with NaN values removed: {skipped_rows}")
-
-        if df_clean.empty:
-            logging.warning("No valid data available after removing rows with NaN values.")
+        if df.empty:
+            logging.warning("No data available in the CSV file.")
             return pd.DataFrame()
 
         # Define a function to process each row
         def process_row(row):
             # Extract landmarks as a list of tuples (x, y, z)
-            landmarks = [tuple(row[f'landmark_{i}_{coord}'] for coord in ['x', 'y', 'z']) for i in range(len(self.hand_landmarks))]
+            landmarks = [tuple(row.get(f'landmark_{i}_{coord}', np.nan) for coord in ['x', 'y', 'z']) for i in range(len(self.hand_landmarks))]
             return self.get_calculated_angles(landmarks)
 
         # Apply the function to each row
-        angles_df = df_clean.apply(process_row, axis=1, result_type='expand')
+        angles_df = df.apply(process_row, axis=1, result_type='expand')
 
         # Combine the timestamp with the angles
-        processed_df = pd.concat([df_clean[['timestamp']].reset_index(drop=True), angles_df], axis=1)
+        processed_df = pd.concat([df[['timestamp']].reset_index(drop=True), angles_df], axis=1)
 
-        logging.info(f"Processed {len(df_clean)} rows after removing NaNs.")
+        logging.info(f"Processed {len(processed_df)} rows.")
         
         return processed_df
 
@@ -230,23 +226,32 @@ class FingerDataProcessor:
 
 # Example Usage
 if __name__ == "__main__":
-    # Path to your CSV file
-    folder = 'EMG Hand Data 20241030_233323'
-    csv_file = f'{folder}/fingers.csv'  # Replace with your actual CSV file path
-    output_csv = f'{folder}/finger_angles.csv'  # Desired output file path
+
+    # Path to the data_session_2 directory
+    base_folder = 'data'
 
     # Initialize the processor
     processor = FingerDataProcessor()
 
-    # Process the CSV and get the angles data as a DataFrame
-    angles_df = processor.load_and_process_csv(csv_file)
+    # Iterate over each 'EMG Hand Data' folder in base_folder
+    for folder_name in os.listdir(base_folder):
+        folder_path = os.path.join(base_folder, folder_name)
+        if os.path.isdir(folder_path) and 'EMG Hand Data' in folder_name:
+            csv_file = os.path.join(folder_path, 'fingers.csv')
+            output_csv = os.path.join(folder_path, 'finger_angles.csv')
+            
+            if os.path.exists(csv_file):
+                # Process the CSV and get the angles data as a DataFrame
+                angles_df = processor.load_and_process_csv(csv_file)
+                
+                # Example: Print the first few entries
+                if not angles_df.empty:
+                    print(f"First few processed entries in {folder_name}:")
+                    print(angles_df.head())
+                else:
+                    print(f"No valid data found in the CSV file in {folder_name}.")
 
-    # Example: Print the first few entries
-    if not angles_df.empty:
-        print("First few processed entries:")
-        print(angles_df.head())
-    else:
-        print("No valid data found in the CSV file.")
-
-    # Optionally, save the processed data to a new CSV
-    processor.save_processed_data(angles_df, output_csv)
+                # Optionally, save the processed data to a new CSV
+                processor.save_processed_data(angles_df, output_csv)
+            else:
+                print(f"'fingers.csv' not found in {folder_name}")
