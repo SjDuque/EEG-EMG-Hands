@@ -12,6 +12,7 @@ import shutil
 from tqdm import tqdm  # For progress bar
 import glob  # For processing frames
 from random import shuffle
+from itertools import combinations
 
 # Suppress TensorFlow warnings
 import warnings
@@ -20,27 +21,43 @@ warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf'
 # ================================
 # Configuration Parameters
 # ================================
+# Define labels and groups
+left_hand = True
 status_labels = ['thumb', 'index', 'middle', 'ring', 'pinky']
-# status_lists = [
-#     [True, False, True, False, True],
-#     [False, True, False, True, False],
-#     [True, True, False, False, True],
-#     [False, False, True, True, False],
-#     [True, False, False, True, True],
-# ]
-# status_list should be a list of 5 booleans, each representing the status of a finger.
-# True means the finger is extended, False means the finger is not extended.
-# Create every possible combination of 5 fingers
-status_lists = []
-for i in range(2 ** (len(status_labels))):
-    status_list = [bool((i >> j) & 1) for j in range(5)]
-    status_lists.append(status_list)
-shuffle(status_lists)  # Randomize the order of status lists
-status_switch_interval = 5  # seconds
+status_labels_idx = {label: i for i, label in enumerate(status_labels)}
+status_groups = ['thumb', 'index', 'middle', ['ring', 'pinky']]
+
+if left_hand:
+    status_labels = status_labels[::-1]
+    status_labels_idx = {label: i for i, label in enumerate(status_labels)}
+    status_groups = status_groups[::-1]
+
+# Generate all possible status lists based on the labels and groups
+def generate_status_lists():
+    result = []
+    num_groups = len(status_groups)
+    
+    for num_true in range(num_groups + 1):  # 0 to len(status_groups) True values
+        for combo in combinations(range(num_groups), num_true):
+            # Initialize a status list with False
+            status = [False] * len(status_labels)
+            for group_index in combo:
+                group = status_groups[group_index]
+                if isinstance(group, list):  # For groups like ['ring', 'pinky']
+                    for label in group:
+                        status[status_labels_idx[label]] = True
+                else:  # For individual labels like 'thumb', 'index'
+                    status[status_labels_idx[group]] = True
+            result.append(status)
+    return result
+    
+status_lists = generate_status_lists()
+status_switch_interval = 3  # seconds
 process_after_recording = True
 delete_after_processing = False
 save_all_frames = True
 use_half = True
+flip_camera = False
 camera_refresh_rate = 120  # Hz
 camera_resolution = (1280, 480)
 
@@ -56,20 +73,51 @@ last_status_switch_time = pylsl.local_clock()
 # ================================
 # Functions
 # ================================
-def draw_status_circles(image, status):
+def draw_status_circles(image, status, status_labels):
     """
-    Draws five circles on the image.
+    Draws circles on the image, equally spaced based on image width.
     Each circle is green if status[i] is True, else red.
+    Adds status labels below each circle.
     """
     radius = 20
-    spacing = 30
-    start_x = 50
-    start_y = 50
-    for i in range(5):
-        center_x = start_x + i * (2 * radius + spacing)
-        center_y = start_y
-        color = (0, 255, 0) if status[i] else (0, 0, 255)  # Green or Red
+    num_circles = len(status)
+    image_width = image.shape[1]
+    margin = 50
+    total_spacing = image_width - 2 * margin - (2 * radius * num_circles)
+    spacing = total_spacing / (num_circles - 1) if num_circles > 1 else 0
+    center_y = 50
+    label_offset = 25
+    red = (0, 0, 255)
+    green = (0, 255, 0)
+    black = (0, 0, 0)
+    white = (255, 255, 255)
+
+    for i in range(num_circles):
+        center_x = int(margin + i * (2 * radius + spacing))
+        color = green if status[i] else red  # Green or Red
         cv2.circle(image, (center_x, center_y), radius, color, -1)
+        # Add label below the circle
+        label = status_labels[i]
+        font_scale = 0.5
+        text_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+        text_x = center_x - text_size[0] // 2
+        text_y = center_y + radius + label_offset
+        cv2.putText(image, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 1)
+        
+        # if green or red, then also display 'up' or 'down', respectively
+        # in the circle itself as black bold text, centered
+        if status[i]:
+            text = 'up'
+        else:
+            text = 'down'
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5  # Increased font size for better visibility
+        thickness = 2      # Increased thickness for bold text
+        text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
+        text_x = center_x - text_size[0] // 2
+        text_y = center_y + text_size[1] // 2
+        cv2.putText(image, text, (text_x, text_y), font, font_scale, black, thickness)
+            
 
 def collect_emg_data(inlet, emg_data_list, emg_channel_count, stop_event):
     """Collect EMG data at high frequency using LSL timestamps."""
@@ -262,13 +310,13 @@ def main():
             if current_time - last_status_switch_time >= status_switch_interval:
                 if status_index % len(status_lists) == 0:
                     shuffle(status_lists)
-                current_status = status_lists[status_index % len(status_lists)]
                 status_index += 1
+                current_status = status_lists[status_index % len(status_lists)]
                 print(f"Switched to status list index {status_index % len(status_lists)}")
                 last_status_switch_time = current_time
 
             if display_image is not None:
-                draw_status_circles(display_image, current_status)
+                draw_status_circles(display_image, current_status, status_labels)
                 cv2.imshow('Camera', display_image)
                 display_counter += 1  # Added for Display Refresh Rate
 
