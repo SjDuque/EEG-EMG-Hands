@@ -128,9 +128,8 @@ class Graph:
         self.stop_event = threading.Event()
         self.lsl_thread = LSLStreamer(self.outlet, self.data_queue, self.stop_event)
         self.lsl_thread.start()
-
-        self.update_speed_ms = 50  # 50 ms interval (~20 Hz)
-        self.window_size = 2        # 2 seconds of data
+        self.update_speed_ms = 1000 // 250 # 250 Hz
+        self.window_size = 5                # 1 seconds of data
         self.num_points = self.window_size * self.sampling_rate
 
         self.app = QtWidgets.QApplication([])
@@ -225,6 +224,12 @@ class Graph:
 
                 # Bandpass filter
                 DataFilter.perform_bandpass(channel_data, self.sampling_rate, 4.0, 250, 2, FilterTypes.BUTTERWORTH_ZERO_PHASE, 0)
+                
+                # Bandstop filter to remove 58-62 Hz noise
+                DataFilter.perform_bandstop(channel_data, self.sampling_rate, 48.0, 52.0, 2,
+                                        FilterTypes.BUTTERWORTH_ZERO_PHASE, 0)
+                DataFilter.perform_bandstop(channel_data, self.sampling_rate, 58.0, 62.0, 2,
+                                        FilterTypes.BUTTERWORTH_ZERO_PHASE, 0)
 
                 # Notch filter to remove powerline noise
                 DataFilter.remove_environmental_noise(channel_data, self.sampling_rate, NoiseTypes.FIFTY_AND_SIXTY)
@@ -282,7 +287,7 @@ def main():
 
     try:
         serial_port = find_serial_port()
-        board_id = BoardIds.CYTON_BOARD  # Replace with your actual board
+        board_id = BoardIds.CYTON_BOARD
         emg = True
 
         graph = Graph(board_id=board_id, emg=emg, serial_port=serial_port)
