@@ -1,7 +1,9 @@
+# main_script.py
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, r2_score
 from sklearn.utils.class_weight import compute_class_weight
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, Input, BatchNormalization, Conv1D, MaxPooling1D, Flatten, LSTM, Add, Activation
@@ -22,7 +24,9 @@ from model_utils import (
     plot_learning_curves,
     resample_dataframe,
     resample_dataframe_signal,
-    AugmentedDataGenerator
+    AugmentedDataGenerator,
+    low_pass_filter,
+    smooth_emg
 )
 
 # Configuration Parameters
@@ -48,7 +52,7 @@ JOINT_ANGLE_THRESHOLDS = {
 
 # Sampling Rates: Resample EMG and Finger data
 EMG_SAMPLING_RATE = 250  # Hz
-FINGER_SAMPLING_RATE = 120  # Hz
+FINGER_SAMPLING_RATE = 100  # Hz
 
 # New Configuration Parameters for Frame-Based Processing
 NUM_FRAMES = EMG_SAMPLING_RATE//2  # Number of EMG frames to include before the timestamp
@@ -56,9 +60,9 @@ FRAME_STEP = 1   # Step size between frames
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-def save_model_and_preprocessing(model, emg_scaler, emg_means, emg_stds, model_dir):
+def save_model_and_preprocessing(model, scaler, emg_means, emg_stds, model_dir):
     """
-    Saves the trained model and the emg scaler to the specified directory.
+    Saves the trained model and the EMG scaler to the specified directory.
 
     Parameters:
     - model: Trained Keras model.
@@ -70,7 +74,7 @@ def save_model_and_preprocessing(model, emg_scaler, emg_means, emg_stds, model_d
     os.makedirs(model_dir, exist_ok=True)
     model.save(os.path.join(model_dir, 'model.keras'))
     # Save the EMG scaler
-    joblib.dump(emg_scaler, os.path.join(model_dir, 'emg_scaler.joblib'))
+    joblib.dump(scaler, os.path.join(model_dir, 'emg_scaler.joblib'))
     # Save Configuration Parameters
     config = {
         'NUM_FRAMES': NUM_FRAMES,
@@ -145,6 +149,9 @@ def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_s
         # Drop rows with missing data
         fingers_df.dropna(subset=expected_finger_columns, inplace=True)
         emg_df.dropna(subset=expected_emg_columns, inplace=True)
+        
+        # Rectify negative EMG values using abs
+        emg_df[emg_channels] = emg_df[emg_channels].abs()
 
         if not use_existing_scaler:
             current_emg_means = emg_df[emg_channels].mean()
@@ -156,6 +163,15 @@ def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_s
                 raise ValueError("emg_means and emg_stds must be provided when use_existing_scaler is True.")
             emg_df[emg_channels] = (emg_df[emg_channels] - emg_means) / emg_stds
             logging.info(f"EMG data normalized using existing scaler for session {session_dir}.")
+
+        # Apply low-pass filter to EMG channels
+        for channel in emg_channels:
+            emg_df[channel] = low_pass_filter(emg_df[channel].values, cutoff=4, fs=EMG_SAMPLING_RATE, order=2)
+        logging.info(f"Low-pass filter applied to EMG channels for session {session_dir}.")
+
+        # Apply smoothing to EMG channels
+        emg_df[emg_channels] = smooth_emg(emg_df[emg_channels], beta=0.95, emg_fs=EMG_SAMPLING_RATE)
+        logging.info(f"Smoothing applied to EMG channels for session {session_dir}.")
 
         emg_data = emg_df[emg_channels].values
         emg_timestamps = emg_df['timestamp'].values
@@ -202,60 +218,29 @@ def process_sessions_frame_based(session_dirs, num_frames, emg_means=None, emg_s
     else:
         return X, y, skipped
 
-def evaluate_model(model, X, y, group_names, label='Test Set'):
-    """
-    Evaluate the model and print classification metrics.
-
-    Parameters:
-    - model: Trained Keras model.
-    - X: Features for evaluation.
-    - y: True labels for evaluation.
-    - group_names: Names of the finger groups.
-    - label: Descriptor for the evaluation set.
-    """
-    loss, accuracy = model.evaluate(X, y, verbose=0)
-    logging.info(f"{label} Accuracy: {accuracy * 100:.2f}%")
-    logging.info(f"{label} Loss: {loss:.4f}")
-
-    y_pred_prob = model.predict(X)
-    y_pred = (y_pred_prob > 0.5).astype(int)
-
-    print(f"\n{label} Classification Report:")
-    print(classification_report(
-        y, y_pred,
-        target_names=group_names,
-        zero_division=0
-    ))
-
-    for i, finger_group in enumerate(group_names):
-        print(f"\nConfusion Matrix for {finger_group} ({label}):")
-        cm = confusion_matrix(y[:, i], y_pred[:, i])
-        print(cm)
-
 def main():
     # Define session directories:
-    # EMG Hand Data 20241030_223524 EMG Hand Data 20241030_224059 EMG Hand Data 20241030_224413 EMG Hand Data 20241030_225347 EMG Hand Data 20241030_231057 EMG Hand Data 20241030_232021 EMG Hand Data 20241030_233323 EMG Hand Data 20241030_234704 EMG Hand Data 20241030_235851 EMG Hand Data 20241031_001704 EMG Hand Data 20241031_002827
+    # Update these paths based on your actual data directory structure
     training_session_dirs = [
-        # 'EMG Hand Data 20241030_223524',
-        'EMG Hand Data 20241030_224059',
-        'EMG Hand Data 20241030_224413',
-        'EMG Hand Data 20241030_225347',
-        'EMG Hand Data 20241030_231057',
-        'EMG Hand Data 20241030_232021',
-        'EMG Hand Data 20241030_233323',
-        'EMG Hand Data 20241030_234704',
-        'EMG Hand Data 20241030_235851',
-        'EMG Hand Data 20241031_002827'
+        'data/EMG Hand Data 20241030_224059',
+        'data/EMG Hand Data 20241030_224413',
+        'data/EMG Hand Data 20241030_225347',
+        'data/EMG Hand Data 20241030_231057',
+        'data/EMG Hand Data 20241030_232021',
+        'data/EMG Hand Data 20241030_233323',
+        'data/EMG Hand Data 20241030_234704',
+        'data/EMG Hand Data 20241030_235851',
+        'data/EMG Hand Data 20241031_002827'
         # Add more training session directories as needed
     ]
 
     validation_session_dirs = [
-        'EMG Hand Data 20241030_223524',
+        'data/EMG Hand Data 20241030_223524',
         # Add more validation session directories as needed
     ]
 
     test_session_dirs = [
-        'EMG Hand Data 20241031_001704',
+        'data/EMG Hand Data 20241031_001704',
         # Add more test session directories as needed
     ]
 
@@ -330,7 +315,7 @@ def main():
     # Build the CNN model
     input_shape = (NUM_FRAMES, len(SELECTED_CHANNELS))
     output_dim = y_train_full.shape[1]
-    model = build_cnn_model_stacked_channels(input_shape, output_dim, class_weights)
+    model = build_cnn_model(input_shape, output_dim, class_weights)
     logging.info("CNN Model built.")
 
     # Define callbacks
@@ -345,9 +330,9 @@ def main():
         batch_size=batch_size, 
         shuffle=True,
         add_noise=True, 
-        noise_stddev=0.5,
+        noise_stddev=0.1,
         apply_time_warp=False, 
-        max_warp=0.25,
+        max_warp=0.1,
         apply_magnitude_scaling=True, 
         scale_range=(0.25, 1.25),
     )
@@ -356,7 +341,6 @@ def main():
     history = model.fit(
         train_generator,
         epochs=200,  # Increased epochs for CNN
-        batch_size=1024,  # Adjusted batch size
         validation_data=(X_val_scaled, y_val),
         callbacks=[early_stopping, reduce_lr],
         verbose=1

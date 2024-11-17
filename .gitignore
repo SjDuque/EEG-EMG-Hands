@@ -6,3 +6,5 @@ __pycache__/
 .vscode/
 # ignore all camera_frames folders
 camera_frames/
+*.joblib
+*.keras

@@ -20,6 +20,6 @@ Using hand landmark detection from Mediapipe, I calculated the angles of my fing
 https://github.com/user-attachments/assets/08382008-1f0d-4633-aaa4-c096e12325b7
 
 ## TODO
-1. model.py: save ALL relevant parameters, such as the number of frames, selected channels, and finger groups.
+1. model.py: save ALL relevant parameters, such as the number of frames, selected channels, finger groups, datasets trained on, performance, etc.
 2. Implement resampling option for emg and finger data
 

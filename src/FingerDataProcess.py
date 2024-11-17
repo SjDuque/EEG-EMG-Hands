@@ -12,11 +12,11 @@ class FingerDataProcessor:
 
     def __init__(self, 
                  angle_thresholds={
-                    'thumb_mcp':    (132.5, 157.5),
-                    'index_mcp':    (60, 160),
-                    'middle_mcp':   (40, 167.5),
-                    'ring_mcp':     (30, 167.5),
-                    'pinky_mcp':    (30, 167.5)
+                    'thumb_mcp':    (155, 167.5),
+                    'index_mcp':    (60, 167.5),
+                    'middle_mcp':   (50, 167.5),
+                    'ring_mcp':     (40, 167.5),
+                    'pinky_mcp':    (40, 167.5)
                  }
                 ):
         """
@@ -40,7 +40,7 @@ class FingerDataProcessor:
 
         # Define joint sets for each finger using landmark names
         self.joint_sets = {
-            'thumb_mcp':    [("WRIST", "THUMB_MCP",         "THUMB_TIP")],
+            'thumb_mcp':    [("WRIST", "THUMB_IP",          "THUMB_TIP")],
             'index_mcp':    [("WRIST", "INDEX_FINGER_MCP",  "INDEX_FINGER_TIP")],
             'middle_mcp':   [("WRIST", "MIDDLE_FINGER_MCP", "MIDDLE_FINGER_TIP")],
             'ring_mcp':     [("WRIST", "RING_FINGER_MCP",   "RING_FINGER_TIP")],

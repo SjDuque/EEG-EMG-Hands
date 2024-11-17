@@ -1,6 +1,6 @@
 import serial
 import sys
-from HandTracking.hand_tracking import HandTracking  # Importing the HandTracking class
+from FingerAngles import FingerAngles  # Importing the HandTracking class
 
 # Replace with your ESP32 Bluetooth serial port
 esp32_port = '/dev/cu.ESP32_Hand'
@@ -19,12 +19,12 @@ def set_servo(servo_num, position):
     # print(f"Sent: {command.strip()}")
 
 def main():
-    hand_tracker = HandTracking()
+    hand_tracker = FingerAngles()
     hand_tracker.start()
 
     try:
         while hand_tracker.isOpened():
-            hand_tracker.update(draw_camera=True, draw_angles=True, terminal_out=True, predicted_angles={})
+            hand_tracker.update()
             
             # Retrieve angles and send commands to the ESP32
             for finger in hand_tracker.joint_sets.keys():

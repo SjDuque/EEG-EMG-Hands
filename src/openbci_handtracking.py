@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf'
 # Configuration Parameters
 # ================================
 # Define labels and groups
-left_hand = True
+left_hand = False
 status_labels = ['thumb', 'index', 'middle', 'ring', 'pinky']
 status_labels_idx = {label: i for i, label in enumerate(status_labels)}
 status_groups = ['thumb', 'index', 'middle', ['ring', 'pinky']]
@@ -52,12 +52,12 @@ def generate_status_lists():
     return result
     
 status_lists = generate_status_lists()
-status_switch_interval = 3  # seconds
-process_after_recording = True
+status_switch_interval = 5 # seconds
+process_after_recording = False
 delete_after_processing = False
 save_all_frames = True
 use_half = True
-flip_camera = False
+flip_camera = True
 camera_refresh_rate = 120  # Hz
 camera_resolution = (1280, 480)
 
@@ -129,7 +129,6 @@ def collect_emg_data(inlet, emg_data_list, emg_channel_count, stop_event):
             sample, timestamp = inlet.pull_sample(timeout=1.0)
             if sample:
                 data_row = {'timestamp': timestamp}
-                data_row['timestamp_local'] = pylsl.local_clock()
                 for i in range(emg_channel_count):
                     data_row[f'emg_channel_{i + 1}'] = sample[i]
                 emg_data_list.append(data_row)
@@ -206,7 +205,7 @@ def process_frames(frames_folder, output_csv):
         print("No frames to process.")
         return
 
-    with mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5) as hands:
+    with mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.5) as hands:
         with tqdm(total=total_frames, desc="Processing Frames") as pbar:
             for frame_file in frame_files:
                 filename = os.path.basename(frame_file)

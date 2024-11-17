@@ -16,7 +16,7 @@ class FingerAngles:
 
         # Define joint sets for each finger and their angle thresholds
         self.joint_sets = {
-            'thumb':    [(4, 2, 0)],
+            'thumb':    [((4, 3, 0))],
             'index':    [(8, 5, 0)],
             'middle':   [(12, 9, 0)],
             'ring':     [(16, 13, 0)],
@@ -24,11 +24,11 @@ class FingerAngles:
         }
 
         self.joint_angle_thresholds = {
-            'thumb': (132.5, 157.5),
-            'index': (60, 160),
-            'middle': (40, 167.5),
-            'ring': (30, 167.5),
-            'pinky': (30, 167.5)
+                    'thumb':    (155, 167.5),
+                    'index':    (60, 167.5),
+                    'middle':   (50, 167.5),
+                    'ring':     (40, 167.5),
+                    'pinky':    (40, 167.5)
         }
 
         # Initialize dictionaries to store last known angles and percentages for each finger
