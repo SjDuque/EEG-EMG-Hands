@@ -5,6 +5,8 @@ from brainflow import NoiseTypes
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 from PyQt5 import QtWidgets, QtCore 
+from PyQt5.QtWidgets import QShortcut
+from PyQt5.QtGui import QKeySequence
 
 import serial.tools.list_ports
 
@@ -20,6 +22,19 @@ def find_serial_port():
             return port.device
     raise RuntimeError("OpenBCI board not found. Ensure it is connected.")
 
+class CustomGraphicsLayoutWidget(pg.GraphicsLayoutWidget):
+    """
+    Subclass of GraphicsLayoutWidget to handle key press events.
+    """
+    def __init__(self, parent=None, **kwargs):
+        super().__init__(parent, **kwargs)
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            # Emit a custom signal or directly close the window
+            self.close()
+        else:
+            super().keyPressEvent(event)
 
 class Graph:
     def __init__(self, board_id=BoardIds.SYNTHETIC_BOARD, emg=False, serial_port=''):
@@ -41,12 +56,21 @@ class Graph:
         self.num_points = self.window_size * self.sampling_rate
 
         self.app = QtWidgets.QApplication([])
-        self.win = pg.GraphicsLayoutWidget(title='BrainFlow Plot')
+        
+        # Use the custom GraphicsLayoutWidget
+        self.win = CustomGraphicsLayoutWidget(title='BrainFlow Plot')
         self.win.resize(800, 600)
         self.win.setWindowTitle('BrainFlow Plot')
         self.win.show()
 
+        # Ensure that board is released when window is closed
+        self.win.closeEvent = self.on_close
+
         self._init_timeseries()
+
+        # Optionally, add a shortcut for ESC key as an alternative
+        shortcut = QShortcut(QKeySequence("Esc"), self.win)
+        shortcut.activated.connect(self.win.close)
 
         timer = QtCore.QTimer()
         timer.timeout.connect(self.update)
@@ -57,13 +81,16 @@ class Graph:
         """Prepares the board session and sets SRB2 configuration if needed."""
         try:
             self.board_shim.prepare_session()
-            config_srb2_list = []
             if self.emg and self.board_id in (BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
+                # Set SRB2 configuration for EMG
+                config_srb2_list = []
                 for channel in self.exg_channels:
                     config_srb2_list.append(f"x{channel}060100")
-            # Set SRB2 configuration
-            config_srb2 = ''.join(config_srb2_list)
-            self.board_shim.config_board(config_srb2)
+                # Set SRB2 configuration
+                config_srb2 = ''.join(config_srb2_list)
+                if config_srb2:
+                    self.board_shim.config_board(config_srb2)
+            # Start streaming
             self.board_shim.start_stream(450000)
         except BaseException as e:
             logging.warning("Exception during board setup", exc_info=True)
@@ -86,6 +113,11 @@ class Graph:
 
     def update(self):
         data = self.board_shim.get_current_board_data(self.num_points)
+        if data is None or len(data) == 0:
+            # Print ... with no new line to update the same line
+            print('...', end='\r')
+            return
+        
         for count, channel in enumerate(self.exg_channels):
             # Detrend
             DataFilter.detrend(data[channel], DetrendOperations.CONSTANT.value)
@@ -101,29 +133,31 @@ class Graph:
             
         self.app.processEvents()
 
+    def on_close(self, event):
+        """Handle the window close event to release board resources."""
+        self.release_board()
+        event.accept()
+
     def release_board(self):
         """Releases board resources."""
         if self.board_shim.is_prepared():
             logging.info('Releasing session')
             self.board_shim.release_session()
 
-
 def main():
     BoardShim.enable_dev_board_logger()
     logging.basicConfig(level=logging.DEBUG)
 
-    
-    serial_port = find_serial_port()
-    board_id = BoardIds.CYTON_BOARD
-    emg = True
-
     try:
+        serial_port = find_serial_port()
+        board_id = BoardIds.CYTON_BOARD
+        emg = True
+
         graph = Graph(board_id=board_id, emg=emg, serial_port=serial_port)
     except BaseException:
         logging.warning('Exception', exc_info=True)
     finally:
         logging.info('End')
-
 
 if __name__ == '__main__':
     main()
