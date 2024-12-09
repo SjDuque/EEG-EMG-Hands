@@ -1,0 +1,12 @@
+__pycache__/
+.DS_Store
+*.pyc
+.conda/
+.venv/
+.vscode/
+# ignore all camera_frames folders
+camera_frames/
+arduino/
+swift/
+*.joblib
+*.keras
