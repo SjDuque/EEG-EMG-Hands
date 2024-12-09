@@ -4,7 +4,7 @@ import numpy as np
 import threading
 import time
 import warnings
-import queue  # Use the built-in queue module
+import queue
 import pylsl
 
 # Suppress TensorFlow warnings
@@ -18,11 +18,11 @@ camera_resolution = (640, 360)
 mediapipe_resolution_length = 224
 display_resolution_length = 360
 target_camera_fps = 260
-target_process_fps = 200
+target_mp_fps = 200
 target_display_fps = 30
 
 frame_time_display = 1.0 / target_display_fps
-frame_time_process = 1.0 / target_process_fps
+frame_time_process = 1.0 / target_mp_fps
 stop_event = threading.Event()
 status_index = 0
 last_status_switch_time = time.perf_counter()
@@ -256,7 +256,7 @@ def lsl_landmark_stream(stop_event):
     channel_names = [f"{name}_{coord}" for name in landmark_names for coord in ['x', 'y', 'z']]
 
     # Create LSL StreamInfo
-    info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), 200, 'float32', 'HandLandmarks')
+    info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'HandLandmarks')
 
     # Add channel labels to the stream's description
     channels = info.desc().append_child("channels")
