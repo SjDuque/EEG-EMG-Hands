@@ -29,7 +29,7 @@ def find_serial_port():
     return ''
 
 class BrainFlowGraph(BaseGraph):
-    def __init__(self, board_id=BoardIds.SYNTHETIC_BOARD, emg=False, serial_port=''):
+    def __init__(self, board_id=BoardIds.SYNTHETIC_BOARD, emg=False, serial_port='', lsl_raw=False, lsl_filtered=True):
         # Initialize logging specific to this module
         self._init_logging()
 
@@ -111,6 +111,8 @@ class BrainFlowGraph(BaseGraph):
         )
 
         # Initialize LSL streams
+        self.lsl_raw = lsl_raw
+        self.lsl_filtered = lsl_filtered
         self._init_lsl_streams()
 
         # Initialize data buffers
@@ -145,29 +147,30 @@ class BrainFlowGraph(BaseGraph):
         Initializes LSL streams for raw and filtered data.
         """
         # Define Raw LSL stream info
-        self.raw_lsl_info = StreamInfo(
-            name="raw_exg",
-            type="EXG",
-            channel_count=len(self.exg_channels),
-            nominal_srate=self.sampling_rate,
-            channel_format="float32",
-            source_id="BrainFlowLSLStream"
-        )
+        if self.lsl_raw:
+            self.raw_lsl_info = StreamInfo(
+                name="raw_exg",
+                type="EXG",
+                channel_count=len(self.exg_channels),
+                nominal_srate=self.sampling_rate,
+                channel_format="float32",
+                source_id="BrainFlowLSLStream"
+            )
+            self.raw_lsl_outlet = StreamOutlet(self.raw_lsl_info)
+            logging.info("Raw LSL initialized.")
 
         # Define Filtered LSL stream info
-        self.filtered_lsl_info = StreamInfo(
-            name="filtered_exg",
-            type="EXG",
-            channel_count=len(self.exg_channels),
-            nominal_srate=self.sampling_rate,
-            channel_format="float32",
-            source_id="BrainFlowLSLStream"
-        )
-        
-        # Create LSL outlets
-        self.raw_lsl_outlet = StreamOutlet(self.raw_lsl_info)
-        self.filtered_lsl_outlet = StreamOutlet(self.filtered_lsl_info)
-        logging.info("LSL streams initialized.")
+        if self.lsl_filtered:
+            self.filtered_lsl_info = StreamInfo(
+                name="filtered_exg",
+                type="EXG",
+                channel_count=len(self.exg_channels),
+                nominal_srate=self.sampling_rate,
+                channel_format="float32",
+                source_id="BrainFlowLSLStream"
+            )
+            self.filtered_lsl_outlet = StreamOutlet(self.filtered_lsl_info)
+            logging.info("Filtered LSL initialized.")
 
     def update_lsl_streams(self, num_samples):
         """
@@ -182,8 +185,11 @@ class BrainFlowGraph(BaseGraph):
         filtered_data = self.filtered_exg_buffer[:, -num_samples:].copy()
         timestamp_data = self.timestamp_buffer[-num_samples:].copy()
         
-        self.raw_lsl_outlet.push_chunk(raw_data.T.tolist(), timestamp_data.tolist())
-        self.filtered_lsl_outlet.push_chunk(filtered_data.T.tolist(), timestamp_data.tolist())
+        if self.lsl_raw:
+            self.raw_lsl_outlet.push_chunk(raw_data.T.tolist(), timestamp_data.tolist())
+            
+        if self.lsl_filtered:
+            self.filtered_lsl_outlet.push_chunk(filtered_data.T.tolist(), timestamp_data.tolist())
 
     def update(self):
         """
