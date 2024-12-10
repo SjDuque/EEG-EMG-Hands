@@ -7,13 +7,13 @@ import mediapipe as mp
 def run_receiver_simple():
     # Resolve streams
     print("Looking for HandLandmarks stream...")
-    streams_landmarks = pylsl.resolve_byprop("name", "HandLandmarks", timeout=10)
+    streams_landmarks = pylsl.resolve_stream("name", "HandLandmarks")
     if not streams_landmarks:
         print("No HandLandmarks stream found.")
         return
 
     print("Looking for FingerPercentages stream...")
-    streams_angles = pylsl.resolve_byprop("name", "FingerPercentages", timeout=10)
+    streams_angles = pylsl.resolve_stream("name", "FingerPercentages")
     if not streams_angles:
         print("No FingerPercentages stream found.")
         return
@@ -52,7 +52,7 @@ def run_receiver_simple():
     }
     
     # Thumb, index, middle, ring, pinky
-    finger_thresholds = [(0.8, 0.9), (0.7, 0.9), (0.7, 0.9), (0.7, 0.8), (0.7, 0.9)]
+    finger_thresholds = [(0.85, 0.9), (0.7, 0.9), (0.7, 0.9), (0.7, 0.8), (0.7, 0.9)]
     # Ring finger and pinky are often linked to another finger, so their thresholds
     # may be lower than the others.
     # For example, when I move my left pinky, my ring finger moves.
