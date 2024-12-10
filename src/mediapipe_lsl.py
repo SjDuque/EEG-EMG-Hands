@@ -284,7 +284,7 @@ def lsl_landmark_stream(stop_event):
     
     # Define joint sets for each finger's angle
     joint_set_labels = ['thumb', 'index', 'middle', 'ring', 'pinky']
-    joint_set_list =   [(0, 1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20)]
+    joint_set_list =   [(1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20)]
 
     # Create LSL StreamInfo 
     landmark_info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'HandLandmarks')

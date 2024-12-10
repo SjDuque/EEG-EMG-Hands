@@ -25,4 +25,5 @@ Using a 260 hz Camera
 
 ## FOR MAC USERS
 Make sure to disable 'Reactions' by clicking the green camera icon and ensuring 
-Reactions isn't enabled. This is especially important when running at over 200 FPS.
+Reactions isn't enabled. This is especially important when running at over 200 FPS
+as MacOS will randomly detect a thumbs up, freezing the program.
