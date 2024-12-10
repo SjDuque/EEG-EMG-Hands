@@ -131,6 +131,7 @@ def capture_camera_frames(stop_event, target_fps, resolution):
 
     while not stop_event.is_set():
         frame_timestamp = time.perf_counter()
+        frame_timestamp_lsl = pylsl.local_clock()
         ret, frame = cap.read()
         if not ret:
             print("Failed to grab frame")
@@ -144,12 +145,13 @@ def capture_camera_frames(stop_event, target_fps, resolution):
         delta_process_time = frame_timestamp - last_process_update_time + process_time_lost
         if delta_process_time >= frame_time_process:
             process_frame = cv2.resize(frame, (mediapipe_resolution_length, mediapipe_resolution_length))
+            timestamp_frame = (frame_timestamp_lsl, process_frame)
             try:
-                process_q.put_nowait(process_frame)
+                process_q.put_nowait(timestamp_frame)
             except queue.Full:
                 try:
                     _ = process_q.get_nowait()
-                    process_q.put_nowait(process_frame)
+                    process_q.put_nowait(timestamp_frame)
                 except queue.Empty:
                     pass
             last_process_update_time = frame_timestamp
@@ -195,7 +197,7 @@ def process_frames(stop_event):
         while not stop_event.is_set():
             try:
                 # Wait for a new frame with a timeout to allow graceful exit
-                frame_to_process = process_q.get(timeout=frame_time_display*2)
+                lsl_timestamp, frame_to_process = process_q.get(timeout=frame_time_display*2)
             except queue.Empty:
                 continue  # Check stop_event again
 
@@ -215,12 +217,13 @@ def process_frames(stop_event):
                     hand_landmarks_list = []
                     
                 # Put the landmark data into the landmark_q
+                timestamp_landmarks = (lsl_timestamp, hand_landmarks_list)
                 try:
-                    landmark_q.put_nowait(hand_landmarks_list)
+                    landmark_q.put_nowait(timestamp_landmarks)
                 except queue.Full:
                     try:
                         _ = landmark_q.get_nowait()
-                        landmark_q.put_nowait(hand_landmarks_list)
+                        landmark_q.put_nowait(timestamp_landmarks)
                     except queue.Empty:
                         pass    
                     
@@ -242,8 +245,25 @@ def process_frames(stop_event):
                     fps = int(round(frame_counter / time_diff))
                     print(f"MediaPipe Processing Rate: {fps} fps")
                     frame_counter = 0
-                    last_time = current_fps_time
-                    
+                    last_time = current_fps_time        
+
+def calculate_angle_from_points(a, b, c):
+    """Calculate the angle between three points a, b, and c."""
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    radians = np.arccos(np.dot(a-b, c-b) / (np.linalg.norm(a-b) * np.linalg.norm(c-b)))
+    return radians
+
+def calculate_angle_from_joint_set(landmark_list, joint_set):
+    
+    a = np.array(landmark_list[joint_set[0]*3:joint_set[0]*3+3])
+    b = np.array(landmark_list[joint_set[1]*3:joint_set[1]*3+3])
+    c = np.array(landmark_list[joint_set[2]*3:joint_set[2]*3+3])
+    # Calculate the angle between two vectors
+    return calculate_angle_from_points(a, b, c)
+
+def calculate_angles(landmark_list, joint_set_list):
+    return [calculate_angle_from_joint_set(landmark_list, joint_set) for joint_set in joint_set_list]
+
 def lsl_landmark_stream(stop_event):
     import time  # Ensure time is imported if not already
     global landmark_q
@@ -254,26 +274,42 @@ def lsl_landmark_stream(stop_event):
 
     # Each landmark has x, y, z coordinates
     channel_names = [f"{name}_{coord}" for name in landmark_names for coord in ['x', 'y', 'z']]
+    
+    # Define joint sets for each finger's angle
+    joint_set_labels = ['thumb_ip', 'index_mcp', 'middle_mcp', 'ring_mcp', 'pinky_mcp']
+    joint_set_list =   [(0, 3, 4), (0, 5, 8), (0, 9, 12), (0, 13, 16), (0, 17, 20)]
 
-    # Create LSL StreamInfo
-    info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'HandLandmarks')
+    # Create LSL StreamInfo 
+    landmark_info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'HandLandmarks')
+    angle_info = pylsl.StreamInfo('HandAngles', 'Markers', len(joint_set_labels), target_mp_fps, 'float32', 'HandAngles')
 
     # Add channel labels to the stream's description
-    channels = info.desc().append_child("channels")
+    channels = landmark_info.desc().append_child("channels")
     for name in channel_names:
         channels.append_child("channel").append_child_value("label", name)
+        
+    # Add angle labels to the stream's description
+    angles = angle_info.desc().append_child("angles")
+    for name in joint_set_labels:
+        angles.append_child("angle").append_child_value("label", name)
 
     # Prepare a NaN sample
     nan_sample = [float('nan')] * len(channel_names)
+    
+    # Wait for other threads to start
+    time.sleep(5)
 
     # Create the LSL outlet
-    outlet = pylsl.StreamOutlet(info)
+    landmark_outlet = pylsl.StreamOutlet(landmark_info)
+    angle_outlet = pylsl.StreamOutlet(angle_info)
 
     next_send_time = time.perf_counter()
 
     frame_counter = 0
     last_time = time.perf_counter()
-    last_result = nan_sample
+    
+    last_hand_landmarks = nan_sample
+    last_timestamp = pylsl.local_clock()
 
     while not stop_event.is_set():
         current_time = time.perf_counter()
@@ -282,16 +318,21 @@ def lsl_landmark_stream(stop_event):
         if current_time >= next_send_time:
             try:
                 # Attempt to get the latest landmark data without blocking
-                hand_landmarks = landmark_q.get_nowait()
+                timestamp, hand_landmarks = landmark_q.get_nowait()
             except queue.Empty:
-                hand_landmarks = last_result
+                timestamp = last_timestamp + frame_time_process
+                hand_landmarks = last_hand_landmarks
 
             if not hand_landmarks or len(hand_landmarks) != len(channel_names):
                 hand_landmarks = nan_sample
-            last_result = hand_landmarks 
+            last_timestamp = timestamp
+            last_hand_landmarks = hand_landmarks
+    
+            calc_angles = calculate_angles(hand_landmarks, joint_set_list)
             
-            # Send the sample
-            outlet.push_sample(hand_landmarks)
+            # Send the samples
+            landmark_outlet.push_sample(hand_landmarks, timestamp)
+            angle_outlet.push_sample(calc_angles, timestamp)
 
             # Update the next send time
             next_send_time += frame_time_process

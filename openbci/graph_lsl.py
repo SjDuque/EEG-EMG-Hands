@@ -89,8 +89,6 @@ class LSLGraphPlotter(BaseGraph):
                 self.filtered_buffer[:, -num_samples_filtered:] = chunk_filtered
                 self.timestamp_buffer = np.roll(self.timestamp_buffer, -num_samples_filtered)
                 self.timestamp_buffer[-num_samples_filtered:] = timestamp_filtered[:num_samples_filtered]
-                logging.debug(f"Received {num_samples_filtered} filtered samples.")
-                logging.debug(f"Timestamps: {((self.timestamp_buffer[-num_samples_filtered:])*1000).astype(int)%1000} ms")
 
                 # Update plots
                 time_axis = np.linspace(-self.window_size, 0, self.buffer_size)
