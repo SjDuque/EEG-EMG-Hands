@@ -253,16 +253,23 @@ def calculate_angle_from_points(a, b, c):
     radians = np.arccos(np.dot(a-b, c-b) / (np.linalg.norm(a-b) * np.linalg.norm(c-b)))
     return radians
 
-def calculate_angle_from_joint_set(landmark_list, joint_set):
+def calculate_finger_percentage(landmark_list, joint_set):
     
     a = np.array(landmark_list[joint_set[0]*3:joint_set[0]*3+3])
     b = np.array(landmark_list[joint_set[1]*3:joint_set[1]*3+3])
     c = np.array(landmark_list[joint_set[2]*3:joint_set[2]*3+3])
     # Calculate the angle between two vectors
-    return calculate_angle_from_points(a, b, c)
+    return calculate_angle_from_points(a, b, c) / np.pi
 
-def calculate_angles(landmark_list, joint_set_list):
-    return [calculate_angle_from_joint_set(landmark_list, joint_set) for joint_set in joint_set_list]
+def calculate_finger_percentages(landmark_list, joint_set_list):
+    finger_percentages_list = []
+    for joint_set in joint_set_list:
+        avg_percentage = 0
+        for i in range(0, len(joint_set)-2):
+            avg_percentage += calculate_finger_percentage(landmark_list, joint_set[i:i+3])
+        finger_percentages_list.append(avg_percentage / (len(joint_set)-2))
+    
+    return finger_percentages_list
 
 def lsl_landmark_stream(stop_event):
     import time  # Ensure time is imported if not already
@@ -276,12 +283,12 @@ def lsl_landmark_stream(stop_event):
     channel_names = [f"{name}_{coord}" for name in landmark_names for coord in ['x', 'y', 'z']]
     
     # Define joint sets for each finger's angle
-    joint_set_labels = ['thumb_ip', 'index_mcp', 'middle_mcp', 'ring_mcp', 'pinky_mcp']
-    joint_set_list =   [(0, 3, 4), (0, 5, 8), (0, 9, 12), (0, 13, 16), (0, 17, 20)]
+    joint_set_labels = ['thumb', 'index', 'middle', 'ring', 'pinky']
+    joint_set_list =   [(0, 1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20)]
 
     # Create LSL StreamInfo 
     landmark_info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'HandLandmarks')
-    angle_info = pylsl.StreamInfo('HandAngles', 'Markers', len(joint_set_labels), target_mp_fps, 'float32', 'HandAngles')
+    angle_info = pylsl.StreamInfo('FingerPercentages', 'Markers', len(joint_set_labels), target_mp_fps, 'float32', 'FingerPercentages')
 
     # Add channel labels to the stream's description
     channels = landmark_info.desc().append_child("channels")
@@ -297,7 +304,7 @@ def lsl_landmark_stream(stop_event):
     nan_sample = [float('nan')] * len(channel_names)
     
     # Wait for other threads to start
-    time.sleep(5)
+    time.sleep(1)
 
     # Create the LSL outlet
     landmark_outlet = pylsl.StreamOutlet(landmark_info)
@@ -328,7 +335,7 @@ def lsl_landmark_stream(stop_event):
             last_timestamp = timestamp
             last_hand_landmarks = hand_landmarks
     
-            calc_angles = calculate_angles(hand_landmarks, joint_set_list)
+            calc_angles = calculate_finger_percentages(hand_landmarks, joint_set_list)
             
             # Send the samples
             landmark_outlet.push_sample(hand_landmarks, timestamp)
