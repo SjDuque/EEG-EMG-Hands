@@ -18,7 +18,7 @@ camera_resolution = (640, 360)
 mediapipe_resolution_length = 224
 display_resolution_length = 360
 target_camera_fps = 260
-target_mp_fps = 200
+target_mp_fps = 250
 target_display_fps = 30
 
 frame_time_display = 1.0 / target_display_fps

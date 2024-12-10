@@ -12,11 +12,17 @@ Note: There is no webcam use in this example, I am using an OpenBCI Cyton to rea
 
 https://github.com/user-attachments/assets/c013bcee-4476-4542-a547-f4df26d3af68
 
-
-
 ## Controlling a robotic arm using mediapipe/camera (src/MediapipeEsp32.py)
 Using hand landmark detection from Mediapipe, I calculated the angles of my fingers and mapped them to the servos on the robotic hand.
 
 https://github.com/user-attachments/assets/08382008-1f0d-4633-aaa4-c096e12325b7
 
+## Performance
 
+`src/mediapipe_lsl.py`
+Using a 260 hz Camera
+- M4 Mac Mini 16 GB: ~ 230 FPS
+
+## FOR MAC USERS
+Make sure to disable 'Reactions' by clicking the green camera icon and ensuring 
+Reactions isn't enabled. This is especially important when running at over 200 FPS.
