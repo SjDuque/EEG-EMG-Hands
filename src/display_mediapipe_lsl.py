@@ -18,8 +18,8 @@ def run_receiver_simple():
         print("No FingerPercentages stream found.")
         return
 
-    inlet_landmarks = pylsl.StreamInlet(streams_landmarks[0])
-    inlet_percentages = pylsl.StreamInlet(streams_angles[0])
+    inlet_landmarks = pylsl.StreamInlet(streams_landmarks[0], processing_flags=pylsl.proc_ALL)
+    inlet_percentages = pylsl.StreamInlet(streams_angles[0], processing_flags=pylsl.proc_ALL)
     
     # Print the inlet info
     print("Landmarks Inlet Info:")
