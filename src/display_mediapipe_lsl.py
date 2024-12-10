@@ -1,8 +1,6 @@
 import pylsl
 import numpy as np
 import cv2
-import time
-import mediapipe as mp
 
 def run_receiver_simple():
     # Resolve streams
@@ -52,7 +50,7 @@ def run_receiver_simple():
     }
     
     # Thumb, index, middle, ring, pinky
-    finger_thresholds = [(0.85, 0.9), (0.7, 0.9), (0.7, 0.9), (0.7, 0.8), (0.7, 0.9)]
+    finger_thresholds = [(0.8, 0.9), (0.7, 0.875), (0.75, 0.875), (0.675, 0.8), (0.675, 0.8)]
     # Ring finger and pinky are often linked to another finger, so their thresholds
     # may be lower than the others.
     # For example, when I move my left pinky, my ring finger moves.
