@@ -50,7 +50,7 @@ def run_receiver_simple():
     }
     
     # Thumb, index, middle, ring, pinky
-    finger_thresholds = [(0.8, 0.9), (0.7, 0.875), (0.75, 0.875), (0.675, 0.8), (0.675, 0.8)]
+    finger_thresholds = [(0.8, 0.9), (0.7, 0.875), (0.75, 0.875), (0.7, 0.8), (0.7, 0.825)]
     # Ring finger and pinky are often linked to another finger, so their thresholds
     # may be lower than the others.
     # For example, when I move my left pinky, my ring finger moves.
