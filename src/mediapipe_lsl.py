@@ -6,6 +6,7 @@ import time
 import warnings
 import queue
 import pylsl
+from itertools import combinations
 
 # Suppress TensorFlow warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
@@ -45,7 +46,6 @@ if left_hand:
     status_groups = status_groups[::-1]
 
 def generate_status_lists():
-    from itertools import combinations
     result = []
     num_groups = len(status_groups)
 
@@ -106,7 +106,7 @@ def draw_status_circles(image, status, status_labels):
 
 def capture_camera_frames(stop_event, target_fps, resolution):
     global process_q, display_q
-    
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Cannot open camera")
@@ -159,13 +159,13 @@ def capture_camera_frames(stop_event, target_fps, resolution):
             
         delta_display_time = frame_timestamp - last_display_update_time + display_time_lost
         if delta_display_time >= frame_time_display:
-            display_frame = cv2.resize(frame, (display_resolution_length, display_resolution_length))
+            display_frame_resized = cv2.resize(frame, (display_resolution_length, display_resolution_length))
             try:
-                display_q.put_nowait(display_frame)
+                display_q.put_nowait(display_frame_resized)
             except queue.Full:
                 try:
                     _ = display_q.get_nowait()
-                    display_q.put_nowait(display_frame)
+                    display_q.put_nowait(display_frame_resized)
                 except queue.Empty:
                     pass
             last_display_update_time = frame_timestamp
@@ -254,7 +254,6 @@ def calculate_angle_from_points(a, b, c):
     return radians
 
 def calculate_finger_percentage(landmark_list, joint_set):
-    
     a = np.array(landmark_list[joint_set[0]*3:joint_set[0]*3+3])
     b = np.array(landmark_list[joint_set[1]*3:joint_set[1]*3+3])
     c = np.array(landmark_list[joint_set[2]*3:joint_set[2]*3+3])
@@ -271,8 +270,7 @@ def calculate_finger_percentages(landmark_list, joint_set_list):
     
     return finger_percentages_list
 
-def lsl_landmark_stream(stop_event):
-    import time  # Ensure time is imported if not already
+def lsl_mp_stream(stop_event):
     global landmark_q
 
     # Initialize MediaPipe Hands to get landmark names
@@ -306,7 +304,7 @@ def lsl_landmark_stream(stop_event):
     # Wait for other threads to start
     time.sleep(1)
 
-    # Create the LSL outlet
+    # Create the LSL outlets
     landmark_outlet = pylsl.StreamOutlet(landmark_info)
     angle_outlet = pylsl.StreamOutlet(angle_info)
 
@@ -356,7 +354,7 @@ def lsl_landmark_stream(stop_event):
                 frame_counter = 0
                 last_time = current_time
 
-            # Sleep until the next send time to maintain 200 FPS
+            # Sleep until the next send time to maintain the target FPS
             sleep_duration = next_send_time - time.perf_counter()
             if sleep_duration > 0:
                 time.sleep(sleep_duration)
@@ -365,9 +363,39 @@ def lsl_landmark_stream(stop_event):
                 # Continue without sleeping to catch up
                 pass
 
+def lsl_status_stream(stop_event):
+    global current_status, status_index
+    
+    # Create LSL StreamInfo for status
+    
+    status_info = pylsl.StreamInfo('FingerStatus', 'Markers', len(status_labels), 1/status_switch_interval, 'int8', 'FingerStatus')
+
+    # Add channel labels to the stream's description
+    channels = status_info.desc().append_child("channels")
+    for name in status_labels:
+        channels.append_child("channel").append_child_value("label", name)
+
+    # Create the LSL outlet
+    status_outlet = pylsl.StreamOutlet(status_info)
+
+    while not stop_event.is_set():
+        # Convert boolean status to integers (0 or 1) for LSL
+        status_int = [int(status) for status in current_status]
+        # Send the status via LSL
+        status_outlet.push_sample(status_int)
+        # Wait for the switch interval
+        time.sleep(status_switch_interval)
+        if status_index == 1:
+            np.random.shuffle(status_lists)
+        # Update the status index
+        status_index = (status_index + 1) % len(status_lists)
+        current_status = status_lists[status_index]
+        print(f"Switched to status list index {status_index}")
+
 def main():
     global stop_event, current_status, status_index, last_status_switch_time
 
+    # Start the camera capture thread
     camera_thread = threading.Thread(
         target=capture_camera_frames,
         args=(stop_event, target_camera_fps, camera_resolution),
@@ -375,21 +403,32 @@ def main():
     )
     camera_thread.start()
 
-    mediapipe_thread = threading.Thread(
+    # Start the MediaPipe processing thread
+    mp_process_thread = threading.Thread(
         target=process_frames,
         args=(stop_event,),
         daemon=True
     )
-    mediapipe_thread.start()
+    mp_process_thread.start()
     
-    lsl_thread = threading.Thread(
-        target=lsl_landmark_stream,
+    # Start the LSL landmark stream thread
+    lsl_mp_thread = threading.Thread(
+        target=lsl_mp_stream,
         args=(stop_event,),
         daemon=True
     )
-    lsl_thread.start()
+    lsl_mp_thread.start()
 
-    np.random.shuffle(status_lists)
+    # Start the LSL status stream thread
+    lsl_status_thread = threading.Thread(
+        target=lsl_status_stream,
+        args=(stop_event,),
+        daemon=True
+    )
+    lsl_status_thread.start()
+
+    # Remove the existing status update logic from the main loop
+    # np.random.shuffle(status_lists)  # Already shuffled in status_update_thread
 
     frame_counter = 0
     last_time = time.perf_counter()
@@ -409,28 +448,24 @@ def main():
             except queue.Empty:
                 continue  # Check stop_event again
 
-            if landmarks:
-                mp.solutions.drawing_utils.draw_landmarks(
-                    display_frame,
-                    landmarks,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                    mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
-                    mp.solutions.drawing_styles.get_default_hand_connections_style()
-                )
+            if display_frame is not None:
+                if landmarks:
+                    mp.solutions.drawing_utils.draw_landmarks(
+                        display_frame,
+                        landmarks,
+                        mp.solutions.hands.HAND_CONNECTIONS,
+                        mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
+                        mp.solutions.drawing_styles.get_default_hand_connections_style()
+                    )
 
-            current_time = time.perf_counter()
-            if current_time - last_status_switch_time >= status_switch_interval:
-                status_index = (status_index + 1) % len(status_lists)
-                current_status = status_lists[status_index]
-                print(f"Switched to status list index {status_index}")
-                last_status_switch_time = current_time
-
+            # Draw status circles based on the current_status
             draw_status_circles(display_frame, current_status, status_labels)
             cv2.imshow('MediaPipe Hand Tracking', display_frame)
             if cv2.waitKey(1) & 0xFF == 27:
                 stop_event.set()
                 break
 
+            current_time = time.perf_counter()
             frame_counter += 1
             if current_time - last_time >= 1.0:
                 fps = int(round(frame_counter / (current_time - last_time)))
@@ -443,8 +478,9 @@ def main():
     finally:
         stop_event.set()
         camera_thread.join()
-        mediapipe_thread.join()
-        lsl_thread.join()
+        mp_process_thread.join()
+        lsl_mp_thread.join()
+        lsl_status_thread.join()
         cv2.destroyAllWindows()
         print("Program terminated gracefully.")
 
