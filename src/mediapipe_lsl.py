@@ -33,7 +33,7 @@ process_q = queue.Queue(maxsize=2)
 landmark_q = queue.Queue(maxsize=2)
 display_landmark_q = queue.Queue(maxsize=2)
 
-left_hand = False
+left_hand = True
 status_labels = ['thumb', 'index', 'middle', 'ring', 'pinky']
 status_labels_idx = {label: i for i, label in enumerate(status_labels)}
 status_groups = ['thumb', 'index', 'middle', ['ring', 'pinky']]

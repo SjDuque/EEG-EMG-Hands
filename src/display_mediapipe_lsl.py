@@ -27,8 +27,10 @@ def run_receiver_simple():
 
     # Assume 21 landmarks, each with x,y,z
     num_landmarks = 21
-    img_size = 600
+    img_size = 360
     scale = img_size  # to scale x,y from [0,1] to image coordinates
+    font_scale = 0.45
+    font_thickness = 2
     
     # Connections between landmarks
     # (color, landmark_list)
@@ -60,12 +62,15 @@ def run_receiver_simple():
 
     while True:
         # Pull samples
-        landmark_sample = inlet_landmarks.pull_chunk(timeout=0.01)[0]
-        percentage_sample = inlet_percentages.pull_chunk(timeout=0.01)[0]
+        landmark_samples, _ = inlet_landmarks.pull_chunk(timeout=0.01)
+        percentage_samples, _ = inlet_percentages.pull_chunk(timeout=0.01)
         
-        if landmark_sample and percentage_sample:
-            landmark_sample = landmark_sample[-1]
-            percentage_sample = percentage_sample[-1]
+        if landmark_samples and percentage_samples:
+            landmark_sample = landmark_samples[-1]
+            percentage_sample = percentage_samples[-1]
+        else:
+            landmark_sample = None
+            percentage_sample = None
 
         if landmark_sample is not None and len(landmark_sample) == num_landmarks*3:
             # Convert to (21,3)
@@ -80,38 +85,36 @@ def run_receiver_simple():
                 for color, landmark_list in connections.values():
                     thickness = 5
                     for i in range(len(landmark_list)-1):
-                        cv2.line(img, tuple((coords[landmark_list[i]][:2]*scale).astype(int)), tuple((coords[landmark_list[i+1]][:2]*scale).astype(int)), color, thickness)
+                        pt1 = tuple((coords[landmark_list[i]][:2]*scale).astype(int))
+                        pt2 = tuple((coords[landmark_list[i+1]][:2]*scale).astype(int))
+                        cv2.line(img, pt1, pt2, color, thickness)
 
                 # Display percentages if available
-                percentages_text = []
                 if percentage_sample is not None:
+                    absolute_texts = []
+                    relative_texts = []
                     for i, a in enumerate(percentage_sample):
                         if np.isnan(a):
-                            percentages_text.append("NaN")
+                            absolute_texts.append("NaN")
+                            relative_texts.append("NaN")
                             continue
-                        percentages_text.append(f"{int(a*100)}%")
-                    percentages_text = ", ".join(percentages_text)
-                    cv2.putText(img, f"Percentages: {percentages_text}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, white, 2)
-                
-                thresholds_text = []
-                if percentage_sample is not None:
-                    for i, a in enumerate(percentage_sample):
-                        if np.isnan(a):
-                            thresholds_text.append("NaN")
-                            continue
+                        absolute_texts.append(f"{int(a*100):3d}%")  # Fixed width with spaces
                         finger_threshold = finger_thresholds[i]
-                        a = (a - finger_threshold[0]) / (finger_threshold[1] - finger_threshold[0]) * 100
-                        a = np.clip(a, 0, 100)
-                        
-                        thresholds_text.append(f"{int(a)}%")
-                    thresholds_text = ", ".join(thresholds_text)
-                    cv2.putText(img, f"Thresholds: {thresholds_text}", (10,55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, white, 2)
+                        relative_a = (a - finger_threshold[0]) / (finger_threshold[1] - finger_threshold[0]) * 100
+                        relative_a = np.clip(relative_a, 0, 100)
+                        relative_texts.append(f"{int(relative_a):3d}%")  # Fixed width with spaces
+
+                    absolute_text = ", ".join(absolute_texts)
+                    relative_text = ", ".join(relative_texts)
+
+                    cv2.putText(img, f"Absolute: {absolute_text}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, font_scale, white, font_thickness)
+                    cv2.putText(img, f"Relative: {relative_text}", (10,55), cv2.FONT_HERSHEY_SIMPLEX, font_scale, white, font_thickness)
 
             cv2.imshow("HandReplay", img)
             
             if cv2.waitKey(1) & 0xFF == 27:
                 break
-    
+
     cv2.destroyAllWindows()
 
 
