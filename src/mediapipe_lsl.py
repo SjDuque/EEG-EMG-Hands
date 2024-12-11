@@ -243,7 +243,7 @@ def process_frames(stop_event):
                 time_diff = current_fps_time - last_time
                 if time_diff >= 1.0:
                     fps = int(round(frame_counter / time_diff))
-                    print(f"MediaPipe Processing Rate: {fps} fps")
+                    print(f"MediaPipe Rate: {fps} fps")
                     frame_counter = 0
                     last_time = current_fps_time        
 
