@@ -352,7 +352,7 @@ def lsl_mp_stream(stop_event):
             # Sleep until the next send time to maintain the target FPS
             sleep_duration = next_send_time - time.perf_counter()
             if sleep_duration > 0:
-                time.sleep(sleep_duration)
+                time.sleep(sleep_duration-frame_time_process/8)
             else:
                 # If sleep_duration is negative, we're behind schedule
                 # Continue without sleeping to catch up
