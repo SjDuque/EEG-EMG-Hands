@@ -131,7 +131,6 @@ def capture_camera_frames(stop_event, target_fps, resolution):
 
     while not stop_event.is_set():
         frame_timestamp = time.perf_counter()
-        frame_timestamp_lsl = pylsl.local_clock()
         ret, frame = cap.read()
         if not ret:
             print("Failed to grab frame")
@@ -145,13 +144,12 @@ def capture_camera_frames(stop_event, target_fps, resolution):
         delta_process_time = frame_timestamp - last_process_update_time + process_time_lost
         if delta_process_time >= frame_time_process:
             process_frame = cv2.resize(frame, (mediapipe_resolution_length, mediapipe_resolution_length))
-            timestamp_frame = (frame_timestamp_lsl, process_frame)
             try:
-                process_q.put_nowait(timestamp_frame)
+                process_q.put_nowait(process_frame)
             except queue.Full:
                 try:
                     _ = process_q.get_nowait()
-                    process_q.put_nowait(timestamp_frame)
+                    process_q.put_nowait(process_frame)
                 except queue.Empty:
                     pass
             last_process_update_time = frame_timestamp
@@ -197,7 +195,7 @@ def process_frames(stop_event):
         while not stop_event.is_set():
             try:
                 # Wait for a new frame with a timeout to allow graceful exit
-                lsl_timestamp, frame_to_process = process_q.get(timeout=frame_time_display*2)
+                frame_to_process = process_q.get(timeout=frame_time_display*2)
             except queue.Empty:
                 continue  # Check stop_event again
 
@@ -217,13 +215,12 @@ def process_frames(stop_event):
                     hand_landmarks_list = []
                     
                 # Put the landmark data into the landmark_q
-                timestamp_landmarks = (lsl_timestamp, hand_landmarks_list)
                 try:
-                    landmark_q.put_nowait(timestamp_landmarks)
+                    landmark_q.put_nowait(hand_landmarks_list)
                 except queue.Full:
                     try:
                         _ = landmark_q.get_nowait()
-                        landmark_q.put_nowait(timestamp_landmarks)
+                        landmark_q.put_nowait(hand_landmarks_list)
                     except queue.Empty:
                         pass    
                     
@@ -314,23 +311,21 @@ def lsl_mp_stream(stop_event):
     last_time = time.perf_counter()
     
     last_hand_landmarks = nan_sample
-    last_timestamp = pylsl.local_clock()
 
     while not stop_event.is_set():
         current_time = time.perf_counter()
 
         # If we're behind schedule, adjust without skipping sends
         if current_time >= next_send_time:
+            timestamp = pylsl.local_clock()
             try:
                 # Attempt to get the latest landmark data without blocking
-                timestamp, hand_landmarks = landmark_q.get_nowait()
+                hand_landmarks = landmark_q.get_nowait()
             except queue.Empty:
-                timestamp = last_timestamp + frame_time_process
                 hand_landmarks = last_hand_landmarks
 
             if not hand_landmarks or len(hand_landmarks) != len(channel_names):
                 hand_landmarks = nan_sample
-            last_timestamp = timestamp
             last_hand_landmarks = hand_landmarks
     
             calc_angles = calculate_finger_percentages(hand_landmarks, joint_set_list)
