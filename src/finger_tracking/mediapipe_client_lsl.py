@@ -2,7 +2,7 @@ import pylsl
 import numpy as np
 import cv2
 
-def run_receiver_simple():
+def mediapipe_client_lsl():
     # Resolve streams
     print("Looking for HandLandmarks stream...")
     streams_landmarks = pylsl.resolve_stream("name", "HandLandmarks")
@@ -115,6 +115,5 @@ def run_receiver_simple():
 
     cv2.destroyAllWindows()
 
-
 if __name__ == "__main__":
-    run_receiver_simple()
+    mediapipe_client_lsl()
