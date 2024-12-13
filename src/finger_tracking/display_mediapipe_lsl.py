@@ -58,8 +58,6 @@ def run_receiver_simple():
     # For example, when I move my left pinky, my ring finger moves.
     # Or if I move my right middle finger, my ring finger moves.
 
-    cv2.namedWindow("HandReplay", cv2.WINDOW_NORMAL)
-
     while True:
         # Pull samples
         landmark_samples, _ = inlet_landmarks.pull_chunk(timeout=0.01)
@@ -110,7 +108,7 @@ def run_receiver_simple():
                     cv2.putText(img, f"Absolute: {absolute_text}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, font_scale, white, font_thickness)
                     cv2.putText(img, f"Relative: {relative_text}", (10,55), cv2.FONT_HERSHEY_SIMPLEX, font_scale, white, font_thickness)
 
-            cv2.imshow("HandReplay", img)
+            cv2.imshow("Hand Tracking Client", img)
             
             if cv2.waitKey(1) & 0xFF == 27:
                 break

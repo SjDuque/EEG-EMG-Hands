@@ -1,7 +1,8 @@
+# OUTDATED FILE - DO NOT USE
+
 import serial
 import time
 import threading
-from finger_tracking.FingerAngles import FingerAngles
 
 # Serial settings
 SERIAL_PORT = "/dev/cu.wchusbserial130"  # Replace with your ESP32's serial port
