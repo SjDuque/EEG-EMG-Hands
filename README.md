@@ -30,3 +30,5 @@ as MacOS will randomly detect a thumbs up, freezing the program.
 
 TODO:
 - Make finger angle detection more robust (sometimes fails)
+  - Remove thresholds from recording
+- Make a txt file for the thresholds/params
