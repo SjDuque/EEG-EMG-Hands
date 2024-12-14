@@ -293,7 +293,7 @@ def lsl_mp_stream(stop_event):
     
         
     # Add angle labels to the stream's description
-    angles = angle_info.desc().append_child("channel")
+    angles = angle_info.desc().append_child("channels")
     for name in joint_set_labels:
         angles.append_child("channel").append_child_value("label", name)
 

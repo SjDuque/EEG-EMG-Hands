@@ -1,5 +1,5 @@
 import numpy as np
-from pylsl import StreamInlet, resolve_stream, resolve_byprop
+from pylsl import StreamInlet, resolve_byprop, proc_ALL
 import time
 import pandas as pd
 
@@ -59,7 +59,7 @@ class EMGAngleRecorder:
                  emg_stream_name="filtered_exg", 
                  angle_stream_name="FingerPercentages",
                  buffer_seconds=60*10,  # Increased buffer to accommodate all data
-                 csv_filename="emg_angle_data.csv",
+                 csv_filename="data/emg_mp",
                  finger_thresholds = ((0.825, 0.9), (0.7, 0.875), 
                                      (0.75, 0.875), (0.7, 0.8), 
                                      (0.7, 0.825))):
@@ -90,8 +90,8 @@ class EMGAngleRecorder:
             raise RuntimeError(f"No angle stream found with name '{self.angle_stream_name}'.")
 
         # Create inlets
-        self.emg_inlet = StreamInlet(emg_streams[0], max_buflen=2)
-        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=2)
+        self.emg_inlet = StreamInlet(emg_streams[0], max_buflen=2, processing_flags=proc_ALL)
+        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=2, processing_flags=proc_ALL)
 
         # Get stream info
         emg_info = self.emg_inlet.info()
@@ -101,8 +101,6 @@ class EMGAngleRecorder:
         self.num_emg_channels = emg_info.channel_count()
         if self.num_emg_channels <= 0:
             raise ValueError("EMG stream channel_count is not set or zero.")
-        self.exg_channels = emg_info.desc().child("channels").child("channel").as_xml()
-        print(f'EMG channels: {self.exg_channels}')
 
         angle_info = self.angle_inlet.info()
         self.angle_rate = angle_info.nominal_srate()
@@ -111,8 +109,15 @@ class EMGAngleRecorder:
         self.num_angle_channels = angle_info.channel_count()
         if self.num_angle_channels <= 0:
             raise ValueError("Angle stream channel_count is not set or zero.")
-        self.mp_channels = angle_info.desc().child("channels").child("channel").as_xml()
-        print(f'Angle channels: {self.mp_channels}')
+        
+        # Extract EMG channel names
+        self.emg_channel_names = [f"ch_{i+1}" for i in range(self.num_emg_channels)]
+            
+        # Extract Angle channel names
+        self.mp_channel_names = ['thumb', 'index', 'middle', 'ring', 'pinky']
+            
+        print(f'EMG channel names: {self.emg_channel_names}')
+        print(f'Angle channel names: {self.mp_channel_names}')
 
         # Calculate buffer capacity
         self.emg_capacity = int(buffer_seconds * self.emg_rate)
@@ -170,10 +175,10 @@ class EMGAngleRecorder:
         emg_samples = emg_samples[emg_mask]
         angle_timestamps = angle_timestamps[angle_mask]
         angle_samples = angle_samples[angle_mask]
-
         # Synchronize data based on nearest timestamps using Pandas
-        emg_df = pd.DataFrame(emg_samples, index=emg_timestamps, columns=self.exg_channels)
-        angle_df = pd.DataFrame(angle_samples, index=angle_timestamps, columns=self.mp_channels)
+        
+        emg_df = pd.DataFrame(emg_samples, index=emg_timestamps, columns=self.emg_channel_names)
+        angle_df = pd.DataFrame(angle_samples, index=angle_timestamps, columns=self.mp_channel_names)
         # Set timestamps as timedelta type
         emg_df.index = pd.to_timedelta(emg_df.index, unit='s')
         angle_df.index = pd.to_timedelta(angle_df.index, unit='s')
@@ -181,8 +186,17 @@ class EMGAngleRecorder:
         # Merge as of the nearest timestamp based
         merged_df = pd.merge_asof(angle_df, emg_df, left_index=True, right_index=True, direction='nearest')
         
+        # Convert timestamps to milliseconds
+        merged_df.index = merged_df.index.astype(int) // 10**6
+        
+        # Subtract the first timestamp to start from 0
+        merged_df.index -= merged_df.index[0]
+        
+        # Name index as 'time' and reset index
+        merged_df.index.name = 'timestamp'
+        
         # Save to CSV using timestamp
-        file_name = f"{self.csv_filename}_{int(end)}.csv"
+        file_name = f"{self.csv_filename}_{int(time.time())}.csv"
         merged_df.to_csv(f"{file_name}")
         
         print(f"Data saved to '{file_name}'. Exiting...")
@@ -191,9 +205,9 @@ def main():
     recorder = EMGAngleRecorder(
         emg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        buffer_seconds=60*60,  # Adjust buffer to 1 hour or higher if needed
-        csv_filename="emg_angle_data",
-        finger_thresholds=((0.825, 0.9), (0.7, 0.875), 
+        csv_filename="data/s_0/emg_mp",
+        buffer_seconds=60*30,  # Adjust buffer based on how long you want to record
+        finger_thresholds=((0.85, 0.9), (0.7, 0.875), 
                           (0.75, 0.875), (0.7, 0.8), 
                           (0.7, 0.825))
     )
