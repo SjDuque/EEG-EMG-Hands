@@ -317,7 +317,8 @@ def lsl_mp_stream(stop_event):
 
         # If we're behind schedule, adjust without skipping sends
         if current_time >= next_send_time:
-            timestamp = pylsl.local_clock()
+            # Calculate the timestamp for the current sample
+            timestamp = pylsl.local_clock() - frame_time_process
             try:
                 # Attempt to get the latest landmark data without blocking
                 hand_landmarks = landmark_q.get_nowait()

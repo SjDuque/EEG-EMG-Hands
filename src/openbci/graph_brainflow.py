@@ -73,7 +73,9 @@ class BrainFlowGraph(BaseGraph):
                 BIAS_SET = 1    # Default is 1 = ON
                 SRB2_SET = 0    # Default is 0
                 SRB1_SET = 0    # Default is 0
-
+                
+                # Channel names: 1 2 3 4 5 6 7 8 Q W E R T Y U I
+                channel_names = ['1', '2', '3', '4', '5', '6', '7', '8', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I']
                 # Ensure each value is a single digit
                 def valid_value(value):
                     return len(str(value)) == 1
@@ -82,7 +84,7 @@ class BrainFlowGraph(BaseGraph):
                     raise ValueError("Invalid value for config settings (All must be a single character).")
 
                 # Set config settings for each channel
-                config_list = [f"x{channel}{POWER_DOWN}{GAIN_SET}{INPUT_TYPE_SET}{BIAS_SET}{SRB2_SET}{SRB1_SET}X" for channel in self.exg_channels]
+                config_list = [f"x{channel_names[channel-1]}{POWER_DOWN}{GAIN_SET}{INPUT_TYPE_SET}{BIAS_SET}{SRB2_SET}{SRB1_SET}X" for channel in self.exg_channels]
                 config = ''.join(config_list)
                 if config:
                     self.board_shim.config_board(config)
@@ -292,7 +294,7 @@ def main():
 
     try:
         serial_port = find_serial_port()
-        board_id = BoardIds.SYNTHETIC_BOARD
+        board_id = BoardIds.CYTON_DAISY_BOARD
         emg = True
 
         brainflow_graph = BrainFlowGraph(board_id=board_id, emg=emg, serial_port=serial_port)
