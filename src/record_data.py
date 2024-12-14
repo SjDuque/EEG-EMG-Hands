@@ -208,8 +208,8 @@ def main():
         csv_filename="data/s_0/emg_mp",
         buffer_seconds=60*30,  # Adjust buffer based on how long you want to record
         finger_thresholds=((0.85, 0.9), (0.7, 0.875), 
-                          (0.75, 0.875), (0.7, 0.8), 
-                          (0.7, 0.825))
+                          (0.75, 0.875), (0.725, 0.8), 
+                          (0.725, 0.825))
     )
     recorder.collect_data()
 

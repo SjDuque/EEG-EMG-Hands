@@ -27,3 +27,6 @@ Using a 260 hz Camera
 Make sure to disable 'Reactions' by clicking the green camera icon and ensuring 
 Reactions isn't enabled. This is especially important when running at over 200 FPS
 as MacOS will randomly detect a thumbs up, freezing the program.
+
+TODO:
+- Make finger angle detection more robust (sometimes fails)
