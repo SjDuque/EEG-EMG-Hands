@@ -290,11 +290,12 @@ def lsl_mp_stream(stop_event):
     channels = landmark_info.desc().append_child("channels")
     for name in channel_names:
         channels.append_child("channel").append_child_value("label", name)
+    
         
     # Add angle labels to the stream's description
-    angles = angle_info.desc().append_child("angles")
+    angles = angle_info.desc().append_child("channel")
     for name in joint_set_labels:
-        angles.append_child("angle").append_child_value("label", name)
+        angles.append_child("channel").append_child_value("label", name)
 
     # Prepare a NaN sample
     nan_sample = [float('nan')] * len(channel_names)
