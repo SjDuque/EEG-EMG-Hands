@@ -67,12 +67,12 @@ class BrainFlowGraph(BaseGraph):
         if self.emg and self.board_id in (BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
             try:
                 # Configuration parameters
-                POWER_DOWN = 0  # Default is 0 = Normal operation
-                GAIN_SET = 6    # Default is 6 = Gain 24
-                INPUT_TYPE_SET = 0  # Default is 0 = Normal electrode input
-                BIAS_SET = 1    # Default is 1 = ON
-                SRB2_SET = 0    # Default is 0
-                SRB1_SET = 0    # Default is 0
+                POWER_DOWN = 0  # EMG is 0 = Normal operation
+                GAIN_SET = 6    # EMG is 6 = Gain 24
+                INPUT_TYPE_SET = 0  # EMG is 0 = Normal electrode input
+                BIAS_SET = 1    # EMG is 1
+                SRB2_SET = 0    # EMG is 0
+                SRB1_SET = 0    # EMG is 0
                 
                 # Channel names: 1 2 3 4 5 6 7 8 Q W E R T Y U I
                 channel_names = ['1', '2', '3', '4', '5', '6', '7', '8', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I']
