@@ -313,10 +313,10 @@ def lsl_mp_stream(stop_event):
     last_time = time.perf_counter()
     
     last_hand_landmarks = nan_sample
+    last_timestamp = pylsl.local_clock() - frame_time_process
 
     while not stop_event.is_set():
         current_time = time.perf_counter()
-        last_timestamp = pylsl.local_clock() - frame_time_process
 
         # If we're behind schedule, adjust without skipping sends
         if current_time >= next_send_time:
