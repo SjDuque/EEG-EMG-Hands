@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON="$SCRIPT_DIR/.conda/bin/python"
 
 # Path to the Python scripts (relative to the script location)
-SCRIPT_1="$SCRIPT_DIR/src/hand_tracking/mediapipe_client_lsl.py"
-SCRIPT_2="$SCRIPT_DIR/src/openbci/graph_filtered_lsl.py"
+SCRIPT_1="$SCRIPT_DIR/src/hand_tracking/mediapipe_client.py"
+SCRIPT_2="$SCRIPT_DIR/src/openbci/brainflow_client.py"
 
 # Open the first script in a new terminal
 osascript -e "tell application \"Terminal\" to do script \"$PYTHON $SCRIPT_1\""
