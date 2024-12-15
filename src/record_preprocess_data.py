@@ -57,13 +57,13 @@ class EMARecorder:
         if self.num_angle_channels <= 0:
             raise ValueError("Angle stream channel_count is not set or zero.")
         
-        # Extract EMG channel names
-        self.emg_channel_names = [f"ch_{i+1}" for i in range(self.num_emg_channels)]
+        # Extract EMG Channel Span names
+        self.emg_span_names = [f"ch_{i+1}_ema_{span}" for span in self.ema_spans for i in range(self.num_emg_channels)]
             
         # Extract Angle channel names
         self.mp_channel_names = ['thumb', 'index', 'middle', 'ring', 'pinky']
             
-        print(f'EMG channel names: {self.emg_channel_names}')
+        print(f'EMG Span channel names: {self.emg_span_names}')
         print(f'Angle channel names: {self.mp_channel_names}')
 
         # Calculate buffer capacity
@@ -134,9 +134,6 @@ class EMARecorder:
         # Stack all EMG samples based on timestamp
         emg_samples = np.stack(emg_samples, axis=-1)
         
-        # EMG Span Channel Names
-        emg_span_names = [f"ch_{i+1}_ema_{span}" for span in self.ema_spans for i in range(self.num_emg_channels)]
-        
         start = max(emg_timestamps[0], angle_timestamps[0])
         end = min(emg_timestamps[-1], angle_timestamps[-1])
         
@@ -156,7 +153,9 @@ class EMARecorder:
         angle_df.index = pd.to_timedelta(angle_df.index, unit='s')
         
         # Merge as of the nearest timestamp based
-        merged_df = pd.merge_asof(angle_df, emg_df, left_index=True, right_index=True, direction='nearest')
+        tolerance = min(1/self.emg_rate, 1/self.angle_rate)
+        tolerance = pd.to_timedelta(tolerance, unit='s')
+        merged_df = pd.merge_asof(angle_df, emg_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
         
         # Convert timestamps to milliseconds
         merged_df.index = merged_df.index.astype(int) // 10**6
