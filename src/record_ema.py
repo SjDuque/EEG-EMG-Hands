@@ -3,6 +3,85 @@ from pylsl import StreamInlet, resolve_byprop, proc_ALL
 import time
 import pandas as pd
 
+class NumpyBuffer:
+    def __init__(self, init_capacity, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+        self.buffer = np.zeros((init_capacity, *shape), dtype=dtype)
+        self.size = 0
+
+    def __len__(self):
+        return self.size
+    
+    def capacity(self):
+        return len(self.buffer)
+    
+    def valid_index(self, idx):
+        return -self.size <= idx < self.size
+    
+    def __setitem__(self, idx, value):
+        self[idx] = value
+
+    def __getitem__(self, idx):
+        # Handle single index
+        if isinstance(idx, int):
+            # Handle negative indices
+            if idx < 0:
+                idx += self.size
+            # Check if index is out of bounds
+            if idx < 0 or idx >= self.size:
+                raise IndexError("Index out of bounds.")
+            # Return element
+            return self.buffer[idx]
+        # Handle slice
+        elif isinstance(idx, slice):
+            start, stop, step = idx.indices(self.size)
+            # Handle negative indices
+            if start < 0:
+                start += self.size
+            if stop < 0:
+                stop += self.size    
+            # Check if index is out of bounds
+            if start < 0 or start >= self.size or stop < 0 or stop > self.size:
+                raise IndexError("Index out of bounds.")
+            # Return sliced buffer
+            return self.buffer[start:stop:step]
+        # Handle list of indices
+        elif isinstance(idx, list):
+            # Handle negative indices
+            idx = [i if i >= 0 else i + self.size for i in idx]
+            # Check if all indices are valid
+            if not all(self.valid_index(i) for i in idx):
+                raise IndexError("Index out of bounds.")
+            # Return list of elements
+            return self.buffer[idx]
+        else:
+            raise TypeError("Invalid index type.")
+        
+    def need_to_expand(self, new_size):
+        return new_size > self.capacity()
+
+    def expand(self, new_capacity=None):
+        if new_capacity is None:
+            new_capacity = self.capacity() * 2
+        new_buffer = np.zeros((new_capacity, *self.shape), dtype=self.dtype)
+        new_buffer[:self.size] = self.buffer[:self.size]
+        self.buffer = new_buffer
+
+    def extend(self, array: np.ndarray):
+        new_size = len(array) + self.size
+        if self.need_to_expand(new_size):
+            new_capacity = max(self.capacity() * 2, new_size)
+            self.expand(new_capacity)
+        self.buffer[self.size:new_size] = array
+
+        self.size += new_size
+
+    def get_all(self):
+        data = self.buffer[:self.size].copy()
+        self.size = 0  # Clear buffer after fetching
+        return data
+
 class EMARecorder:
     def __init__(self, 
                  exg_stream_name="filtered_exg", 
