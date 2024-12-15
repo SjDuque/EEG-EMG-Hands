@@ -7,7 +7,6 @@ class EMARecorder:
     def __init__(self, 
                  emg_stream_name="filtered_exg", 
                  angle_stream_name="FingerPercentages",
-                 buffer_seconds=60*10,  # Increased buffer to accommodate all data
                  csv_filename="data/emg_mp",
                  ema_spans=(1, 2, 4, 8, 16, 32, 64)
                  ):
@@ -16,13 +15,11 @@ class EMARecorder:
 
         :param emg_stream_name: Name of the EMG stream.
         :param angle_stream_name: Name of the Angle stream.
-        :param buffer_seconds: Duration of data to buffer.
         :param csv_filename: Output CSV file name.
         :param ema_spans: Exponential moving average spans.
         """
         self.emg_stream_name = emg_stream_name
         self.angle_stream_name = angle_stream_name
-        self.buffer_seconds = buffer_seconds
         self.csv_filename = csv_filename
 
         # Resolve streams
@@ -50,6 +47,7 @@ class EMARecorder:
             raise ValueError("EMG stream channel_count is not set or zero.")
 
         angle_info = self.angle_inlet.info()
+        print('Angle Channels', angle_info.desc().child('channels').as_string().split(','))
         self.angle_rate = angle_info.nominal_srate()
         if self.angle_rate <= 0:
             raise ValueError("Angle stream sampling rate is not set or zero.")
@@ -57,26 +55,31 @@ class EMARecorder:
         if self.num_angle_channels <= 0:
             raise ValueError("Angle stream channel_count is not set or zero.")
         
-        # Extract EMG Channel Span names
-        self.emg_span_names = [f"ch_{i+1}_ema_{span}" for span in self.ema_spans for i in range(self.num_emg_channels)]
-            
-        # Extract Angle channel names
-        self.mp_channel_names = ['thumb', 'index', 'middle', 'ring', 'pinky']
-            
-        print(f'EMG Span channel names: {self.emg_span_names}')
-        print(f'Angle channel names: {self.mp_channel_names}')
-
-        # Calculate buffer capacity
-        self.emg_capacity = int(buffer_seconds * self.emg_rate)
-        self.angle_capacity = int(buffer_seconds * self.angle_rate)
+        self.update_time = min(1/self.emg_rate, 1/self.angle_rate)
 
         # Initialize buffers
         self.dtype = np.float32
         self.emg_buffer = {span: [] for span in ema_spans}
         self.emg_buffer['timestamp'] = []
         self.ema_spans = ema_spans
-        self.prev_ema_values = {span: 0 for span in ema_spans}
         self.angle_buffer = {'timestamp': [], 'angles': []}
+        
+        # Extract EMG Channel Span names
+        self.emg_span_names = [f"ch_{i+1}_ema_{span}" for span in self.ema_spans for i in range(self.num_emg_channels)]
+        # Extract Angle channel names
+        self.mp_channel_names = ['thumb', 'index', 'middle', 'ring', 'pinky']
+            
+        print(f'EMG Span channel names: {self.emg_span_names}')
+        print(f'Angle channel names: {self.mp_channel_names}')
+        
+        # Initialize previous EMA values
+        initial_emg_sample, initial_emg_timestamp = self.emg_inlet.pull_sample()
+        self.prev_ema_values = {span: np.array(initial_emg_sample) for span in self.ema_spans}
+        
+        # Add initial sample to buffer
+        for span in self.ema_spans:
+            self.emg_buffer[span].append(initial_emg_sample)
+        self.emg_buffer['timestamp'].append(initial_emg_timestamp)
         
     def span_to_alpha(self, span):
         return 2 / (span + 1)
@@ -99,7 +102,7 @@ class EMARecorder:
                         alpha = self.span_to_alpha(span)
                         # Apply EMA to each sample
                         for sample in emg_data:
-                            sample = abs(sample)
+                            sample = np.array(sample).abs()
                             self.prev_ema_values[span] = alpha * sample + (1 - alpha) * self.prev_ema_values[span]
                             new_emg_buffer[span].append(self.prev_ema_values[span])
                             
@@ -113,7 +116,7 @@ class EMARecorder:
                     self.angle_buffer['angles'].extend(angle_data)
 
                 # Sleep briefly to prevent CPU overuse
-                time.sleep(0.001)
+                time.sleep(self.update_time-0.001)
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Preparing to save data...")
             self.save_data()
@@ -133,6 +136,7 @@ class EMARecorder:
         
         # Stack all EMG samples based on timestamp
         emg_samples = np.stack(emg_samples, axis=-1)
+        angle_samples = np.array(self.angle_buffer['angles'], dtype=self.dtype)
         
         start = max(emg_timestamps[0], angle_timestamps[0])
         end = min(emg_timestamps[-1], angle_timestamps[-1])
@@ -153,7 +157,7 @@ class EMARecorder:
         angle_df.index = pd.to_timedelta(angle_df.index, unit='s')
         
         # Merge as of the nearest timestamp based
-        tolerance = min(1/self.emg_rate, 1/self.angle_rate)
+        tolerance = self.update_time
         tolerance = pd.to_timedelta(tolerance, unit='s')
         merged_df = pd.merge_asof(angle_df, emg_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
         
@@ -177,7 +181,6 @@ def main():
         emg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
         csv_filename="data/s_0/emg_mp",
-        buffer_seconds=60*30,  # Adjust buffer based on how long you want to record
     )
     recorder.collect_data()
 
