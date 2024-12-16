@@ -187,16 +187,7 @@ class EMARecorder:
         self.angle_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=angle_shape, dtype=mp_dtype)
         self.angle_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=timestamp_shape, dtype=timestamp_dtype)
         
-        
-        # Initialize EMA values
-        first_sample, _ = self.exg_inlet.pull_sample(timeout=5)
-        ema_shape = (self.num_exg_channels, len(self.ema_spans))
-        
-        if first_sample is None:
-            self.prev_ema_values = np.zeros(ema_shape, dtype=ema_dtype)
-        else:
-            first_sample = np.abs(first_sample, dtype=ema_dtype)
-            self.prev_ema_values = np.tile(first_sample[:, np.newaxis], (1, len(self.ema_spans)))
+        self.prev_ema_values = np.zeros(ema_shape, dtype=ema_dtype)
         
         self.ema_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
         
