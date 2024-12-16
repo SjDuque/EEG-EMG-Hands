@@ -1,6 +1,7 @@
+# record_ema.py
 import numpy as np
 from pylsl import StreamInlet, resolve_byprop
-import pylsl
+import pylsl  
 import time
 import pandas as pd
 
@@ -187,11 +188,18 @@ class EMARecorder:
         self.angle_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=angle_shape, dtype=mp_dtype)
         self.angle_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=timestamp_shape, dtype=timestamp_dtype)
         
-        self.prev_ema_values = np.zeros(ema_shape, dtype=ema_dtype)
+        self.alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.ema_dtype)  # Shape: (num_spans,)
+        self.alphas = self.alphas[np.newaxis, :]
+        
+        # Initialize EMA values
+        
+        prev_ema_shape = (self.num_exg_channels, len(self.ema_spans))
+        self.prev_ema_values = np.zeros(prev_ema_shape, dtype=ema_dtype)
         
         self.ema_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
         
         # Channel -> Span
+        self.ema_span_names = [f"ch_{i+1}_ema_{span}" for i in range(self.num_exg_channels) for span in self.ema_spans]
         self.exg_span_names = []
         
         for i in range(self.num_exg_channels):
@@ -251,49 +259,51 @@ class EMARecorder:
 
     def span_to_alpha(self, span):
         return 2 / (span + 1)
+    
+    def update(self):
+        # Pull data from EMG and Angle streams
+        exg_data, ema_timestamps = self.exg_inlet.pull_chunk(timeout=0.0)
+        angle_data, angle_timestamps = self.angle_inlet.pull_chunk(timeout=0.0)
 
-    def collect_data(self):
+        if exg_data and ema_timestamps:
+            # exg_data shape: (N, num_exg_channels)
+            raw_exg_data = np.array(exg_data, dtype=self.ema_dtype)
+            rect_exg_data = np.abs(raw_exg_data)
+            
+            # Initialize array to store EMA
+            num_samples = len(rect_exg_data)
+            new_ema_samples = np.zeros((num_samples, *self.ema_buffer.shape[1:]), dtype=self.ema_dtype)
+            new_ema_samples[:, :, 0] = raw_exg_data  # Save raw data in the first column
+
+            for i in range(num_samples):
+                sample = rect_exg_data[i]  # Shape: (num_channels,)
+                # Update EMA: alpha * sample + (1 - alpha) * prev_ema
+                # self.prev_ema_values = alphas * sample + (1 - alphas) * self.prev_ema_values
+                # Inplace Equivalent
+                self.prev_ema_values *= (1 - self.alphas)  # Shape: (num_channels, len_spans)
+                self.prev_ema_values += self.alphas * sample[:, np.newaxis]  # Broadcasting alpha
+                new_ema_samples[i, :, 1:] = self.prev_ema_values
+
+            # Append the processed exg data and timestamps
+            self.ema_buffer.extend(new_ema_samples)
+            self.ema_timestamp_buffer.extend(np.array(ema_timestamps, dtype=self.timestamp_dtype))
+
+        if angle_data and angle_timestamps:
+            angle_data = np.array(angle_data, dtype=self.mp_dtype)
+            # Append angle data and timestamps
+            self.angle_buffer.extend(angle_data)
+            self.angle_timestamp_buffer.extend(np.array(angle_timestamps, dtype=self.timestamp_dtype))
+
+    def collect_and_save_loop(self):
         """Continuously collects data from the streams until interrupted."""
         # Precompute alpha values for all spans
         alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.ema_dtype)  # Shape: (num_spans,)
         alphas = alphas[np.newaxis, :] # Shape: (1, num_spans)
         
-        print("Starting data collection. Press Ctrl+C to stop and save data.")
+        print("Starting data collection loop. Press Ctrl+C to stop and save data.")
         try:
             while True:
-                # Pull data from EMG and Angle streams
-                exg_data, ema_timestamps = self.exg_inlet.pull_chunk(timeout=0.0)
-                angle_data, angle_timestamps = self.angle_inlet.pull_chunk(timeout=0.0)
-
-                if exg_data and ema_timestamps:
-                    # exg_data shape: (N, num_exg_channels)
-                    raw_exg_data = np.array(exg_data, dtype=self.ema_dtype)
-                    rect_exg_data = np.abs(raw_exg_data)
-                    
-                    # Initialize array to store EMA
-                    num_samples = len(rect_exg_data)
-                    new_ema_samples = np.zeros((num_samples, *self.ema_buffer.shape[1:]), dtype=self.ema_dtype)
-                    new_ema_samples[:, :, 0] = raw_exg_data  # Save raw data in the first column
-
-                    for i in range(num_samples):
-                        sample = rect_exg_data[i]  # Shape: (num_channels,)
-                        # Update EMA: alpha * sample + (1 - alpha) * prev_ema
-                        # self.prev_ema_values = alphas * sample + (1 - alphas) * self.prev_ema_values
-                        # Inplace Equivalent
-                        self.prev_ema_values *= (1 - alphas)  # Shape: (num_channels, len_spans)
-                        self.prev_ema_values += alphas * sample[:, np.newaxis]  # Broadcasting alpha
-                        new_ema_samples[i, :, 1:] = self.prev_ema_values
-
-                    # Append the processed exg data and timestamps
-                    self.ema_buffer.extend(new_ema_samples)
-                    self.ema_timestamp_buffer.extend(np.array(ema_timestamps, dtype=self.timestamp_dtype))
-
-                if angle_data and angle_timestamps:
-                    angle_data = np.array(angle_data, dtype=self.mp_dtype)
-                    # Append angle data and timestamps
-                    self.angle_buffer.extend(angle_data)
-                    self.angle_timestamp_buffer.extend(np.array(angle_timestamps, dtype=self.timestamp_dtype))
-
+                self.update()
                 # Sleep briefly to prevent CPU overuse
                 time_to_sleep = self.update_time - 0.001
                 if time_to_sleep > 0:
@@ -307,8 +317,7 @@ class EMARecorder:
         """Synchronizes and clears all buffered data, then returns as a DataFrame."""
         # Get EXG data
         if self.angle_buffer.size == 0 or self.ema_buffer.size <= self.ema_buffer_start:
-            print("No data collected. Exiting without saving.")
-            return
+            return None
         
         ema_timestamps = self.ema_timestamp_buffer.get_all()[self.ema_buffer_start:]  # shape: (N,)
         ema_samples = self.ema_buffer.get_all()[self.ema_buffer_start:]  # shape: (N, len(ema_spans), num_exg_channels)
@@ -349,7 +358,10 @@ class EMARecorder:
         # Merge as-of nearest timestamp
         tolerance = pd.to_timedelta(self.update_time, unit='s')
         merged_df = pd.merge_asof(angle_df, ema_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
-
+        
+        if merged_df.empty:
+            return None
+        
         # Convert timestamps to milliseconds
         merged_df.index = (merged_df.index.total_seconds() * 10**3).round().astype(int)
         # Subtract the first timestamp to start from 0
@@ -374,10 +386,10 @@ def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        csv_filename="data/s_1/ema_data",
+        csv_filename="data/s_4/ema_data",
         ema_spans=[1, 2, 4, 8, 16, 32, 64]
     )
-    recorder.collect_data()
+    recorder.collect_and_save_loop()
 
 
 if __name__ == "__main__":
