@@ -177,7 +177,7 @@ class EMARecorder:
         
         # Buffer shapes
         timestamp_shape = ()
-        exg_shape = (len(self.ema_spans), self.num_exg_channels)
+        exg_shape = (self.num_exg_channels, len(self.ema_spans))
         angle_shape = (self.num_angle_channels,)
         
         # Initialize buffers
@@ -190,10 +190,10 @@ class EMARecorder:
         self.prev_ema_values = np.zeros(exg_shape, dtype=exg_dtype)
         self.exg_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
         
-        # EMG Channel Span names
+        # Channel → Span
         self.exg_span_names = []
-        for span in self.ema_spans:
-            for i in range(self.num_exg_channels):
+        for i in range(self.num_exg_channels):
+            for span in self.ema_spans:
                 self.exg_span_names.append(f"ch_{i+1}_ema_{span}")
 
         # Angle channel names
@@ -230,7 +230,7 @@ class EMARecorder:
         """Continuously collects data from the streams until interrupted."""
         # Precompute alpha values for all spans
         alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.exg_dtype)  # Shape: (num_spans,)
-        alphas = alphas[:, np.newaxis]  # Shape: (num_spans, 1) for broadcasting
+        alphas = alphas[np.newaxis, :] # Shape: (1, num_spans)
         
         print("Starting data collection. Press Ctrl+C to stop and save data.")
         try:
@@ -246,16 +246,15 @@ class EMARecorder:
                     
                     # Initialize array to store EMA
                     num_samples = len(exg_data)
-                    new_exg_samples = np.zeros((num_samples, len(self.ema_spans), self.num_exg_channels), dtype=self.exg_dtype)
+                    new_exg_samples = np.zeros((num_samples, self.num_exg_channels, len(self.ema_spans)), dtype=self.exg_dtype)
 
                     for i in range(num_samples):
                         sample = exg_data[i]  # Shape: (num_channels,)
                         # Update EMA: alpha * sample + (1 - alpha) * prev_ema
-                        # Vectorized Equivalent
                         # self.prev_ema_values = alphas * sample + (1 - alphas) * self.prev_ema_values
                         # Inplace Equivalent
-                        self.prev_ema_values *= 1 - alphas
-                        self.prev_ema_values += alphas * sample
+                        self.prev_ema_values *= (1 - alphas)  # Shape: (num_channels, len_spans)
+                        self.prev_ema_values += alphas * sample  # Broadcasting alpha
                         new_exg_samples[i] = self.prev_ema_values
 
                     # Append the processed exg data and timestamps
@@ -305,8 +304,8 @@ class EMARecorder:
         angle_timestamps = angle_timestamps[angle_mask]
         angle_samples = angle_samples[angle_mask]
 
-        # (N, len(ema_spans), num_exg_channels) -> (N, len(ema_spans)*num_exg_channels)
-        exg_samples_reshaped = exg_samples.reshape(-1, len(self.ema_spans)*self.num_exg_channels)
+        # (N, num_exg_channels, len(ema_spans)) -> (N, self.num_exg_channels * len(self.ema_spans))
+        exg_samples_reshaped = exg_samples.reshape(-1, self.num_exg_channels * len(self.ema_spans))
 
         # Create DataFrames
         exg_df = pd.DataFrame(exg_samples_reshaped, index=exg_timestamps, columns=self.exg_span_names)
