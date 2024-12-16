@@ -172,14 +172,22 @@ class EMARecorder:
         timestamp_dtype = np.float64
         init_capacity_exg = int(init_capacity_s * self.exg_rate)
         init_capacity_angle = int(init_capacity_s * self.angle_rate)
-        # EXG shape: (len(ema_spans), num_exg_channels)
-        self.exg_data_buffer = NumpyBuffer(init_capacity=init_capacity_exg, shape=(len(self.ema_spans), self.num_exg_channels), dtype=exg_dtype)
-        self.exg_timestamps_buffer = NumpyBuffer(init_capacity=init_capacity_exg, shape=(), dtype=timestamp_dtype)
+        
+        # Buffer shapes
+        timestamp_shape = ()
+        exg_shape = (len(self.ema_spans), self.num_exg_channels)
+        angle_shape = (self.num_angle_channels,)
+        
+        # Initialize buffers
+        self.exg_buffer = NumpyBuffer(init_capacity=init_capacity_exg, shape=exg_shape, dtype=exg_dtype)
+        self.exg_timestamps_buffer = NumpyBuffer(init_capacity=init_capacity_exg, shape=timestamp_shape, dtype=timestamp_dtype)
 
-        # Angle shape: (num_angle_channels,)
-        self.angle_data_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=(self.num_angle_channels,), dtype=mp_dtype)
-        self.angle_timestamps_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=(), dtype=timestamp_dtype)
-
+        self.angle_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=angle_shape, dtype=mp_dtype)
+        self.angle_timestamps_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=timestamp_shape, dtype=timestamp_dtype)
+        
+        self.prev_ema_values = np.zeros(exg_shape, dtype=exg_dtype)
+        self.exg_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
+        
         # EMG Channel Span names
         self.exg_span_names = []
         for i in range(self.num_exg_channels):
@@ -192,16 +200,14 @@ class EMARecorder:
         print(f'EMG Span channel names: {self.exg_span_names}')
         print(f'Angle channel names: {self.mp_channel_names}')
 
-        self.prev_ema_values = np.zeros((len(self.ema_spans), self.num_exg_channels), dtype=exg_dtype)
-        self.exg_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
 
     @property
     def exg_dtype(self):
-        return self.exg_data_buffer.dtype
+        return self.exg_buffer.dtype
 
     @property
     def mp_dtype(self):
-        return self.angle_data_buffer.dtype
+        return self.angle_buffer.dtype
 
     @property
     def timestamp_dtype(self):
@@ -209,11 +215,11 @@ class EMARecorder:
 
     @property
     def duration_exg_s(self):
-        return self.exg_data_buffer.size / self.exg_rate
+        return self.exg_buffer.size / self.exg_rate
 
     @property
     def duration_angle_s(self):
-        return self.angle_data_buffer.size / self.angle_rate
+        return self.angle_buffer.size / self.angle_rate
 
     def span_to_alpha(self, span):
         return 2 / (span + 1)
@@ -242,13 +248,13 @@ class EMARecorder:
                             new_exg_samples[i, s_idx, :] = self.prev_ema_values[s_idx]
 
                     # Append the processed exg data and timestamps
-                    self.exg_data_buffer.extend(new_exg_samples)
+                    self.exg_buffer.extend(new_exg_samples)
                     self.exg_timestamps_buffer.extend(np.array(exg_timestamps, dtype=self.timestamp_dtype))
 
                 if angle_data and angle_timestamps:
                     angle_data = np.array(angle_data, dtype=self.mp_dtype)
                     # Append angle data and timestamps
-                    self.angle_data_buffer.extend(angle_data)
+                    self.angle_buffer.extend(angle_data)
                     self.angle_timestamps_buffer.extend(np.array(angle_timestamps, dtype=self.timestamp_dtype))
 
                 # Sleep briefly to prevent CPU overuse
@@ -263,17 +269,17 @@ class EMARecorder:
     def save_data(self):
         """Synchronizes all buffered data and writes to the CSV file."""
         # Get EXG data
-        if self.angle_data_buffer.size == 0 or self.exg_data_buffer.size <= self.exg_buffer_start:
+        if self.angle_buffer.size == 0 or self.exg_buffer.size <= self.exg_buffer_start:
             print("No data collected. Exiting without saving.")
             return
         
         exg_timestamps = self.exg_timestamps_buffer.get_all()[self.exg_buffer_start:]  # shape: (N,)
-        exg_samples = self.exg_data_buffer.get_all()[self.exg_buffer_start:]  # shape: (N, len(ema_spans), num_exg_channels)
+        exg_samples = self.exg_buffer.get_all()[self.exg_buffer_start:]  # shape: (N, len(ema_spans), num_exg_channels)
         self.exg_buffer_start = 0
 
         # Get Angle data
         angle_timestamps = self.angle_timestamps_buffer.get_all()  # shape: (M,)
-        angle_samples = self.angle_data_buffer.get_all()  # shape: (M, num_angle_channels)
+        angle_samples = self.angle_buffer.get_all()  # shape: (M, num_angle_channels)
 
         # Synchronize start and end times
         start = max(exg_timestamps[0], angle_timestamps[0])
@@ -323,8 +329,8 @@ def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        csv_filename="data/s_0/exg_angle",
-        ema_spans=[1, 2, 4, 8]  # example spans
+        csv_filename="data/s_1/exg_angle",
+        ema_spans=[1, 2, 4, 8, 16, 32, 64]  # example spans
     )
     recorder.collect_data()
 

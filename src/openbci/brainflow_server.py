@@ -29,7 +29,7 @@ def find_serial_port():
     return ''
 
 class BrainFlowGraph(BaseGraph):
-    def __init__(self, board_id=BoardIds.SYNTHETIC_BOARD, emg=False, 
+    def __init__(self, board_id=BoardIds.SYNTHETIC_BOARD, is_emg=False, 
                  serial_port='', lsl_raw=False, lsl_filtered=True,
                  include_channels=None):
         # Initialize logging specific to this module
@@ -38,7 +38,7 @@ class BrainFlowGraph(BaseGraph):
         self.params = BrainFlowInputParams()
         self.params.serial_port = serial_port
         self.board_id = board_id
-        self.emg = emg
+        self.is_emg = is_emg
 
         # Initialize the board
         try:
@@ -69,7 +69,7 @@ class BrainFlowGraph(BaseGraph):
             sys.exit(1)
 
         # Configure board if EMG is enabled
-        if self.emg and self.board_id in (BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
+        if self.is_emg and self.board_id in (BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
             try:
                 # Configuration parameters
                 POWER_DOWN = 0  # EMG is 0 = Normal operation
@@ -300,10 +300,10 @@ def main():
     try:
         serial_port = find_serial_port()
         board_id = BoardIds.CYTON_DAISY_BOARD
-        emg = True
+        is_emg = True
 
-        brainflow_graph = BrainFlowGraph(board_id=board_id, emg=emg, serial_port=serial_port,
-                                         lsl_raw=True, lsl_filtered=True,
+        brainflow_graph = BrainFlowGraph(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
+                                         lsl_raw=False, lsl_filtered=True,
                                          include_channels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     except RuntimeError as e:
         logging.error(f"RuntimeError: {e}")
