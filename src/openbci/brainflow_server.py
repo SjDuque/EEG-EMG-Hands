@@ -235,7 +235,7 @@ class BrainFlowGraph(BaseGraph):
 
                 # Bandpass filter
                 DataFilter.perform_bandpass(
-                    channel_data, self.sampling_rate, 10.0, 50, 4, FilterTypes.BUTTERWORTH.value, 1.0
+                    channel_data, self.sampling_rate, 10.0, self.sampling_rate/2, 4, FilterTypes.BUTTERWORTH.value, 1.0
                 )
                 
                 # Bandstop filter
