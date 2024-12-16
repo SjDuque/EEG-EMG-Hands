@@ -1,5 +1,6 @@
 import numpy as np
-from pylsl import StreamInlet, resolve_byprop, proc_ALL
+from pylsl import StreamInlet, resolve_byprop
+import pylsl
 import time
 import pandas as pd
 
@@ -143,8 +144,9 @@ class EMARecorder:
             raise RuntimeError(f"No angle stream found with name '{self.angle_stream_name}'.")
 
         # Create inlets
-        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=2, processing_flags=proc_ALL)
-        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=2, processing_flags=proc_ALL)
+        proc_flags = pylsl.proc_clocksync | pylsl.proc_dejitter | pylsl.proc_monotonize
+        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=2, processing_flags=proc_flags)
+        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=2, processing_flags=proc_flags)
 
         # Get stream info
         exg_info = self.exg_inlet.info()
@@ -190,8 +192,8 @@ class EMARecorder:
         
         # EMG Channel Span names
         self.exg_span_names = []
-        for i in range(self.num_exg_channels):
-            for span in self.ema_spans:
+        for span in self.ema_spans:
+            for i in range(self.num_exg_channels):
                 self.exg_span_names.append(f"ch_{i+1}_ema_{span}")
 
         # Angle channel names
@@ -226,6 +228,10 @@ class EMARecorder:
 
     def collect_data(self):
         """Continuously collects data from the streams until interrupted."""
+        # Precompute alpha values for all spans
+        alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.exg_dtype)  # Shape: (num_spans,)
+        alphas = alphas[:, np.newaxis]  # Shape: (num_spans, 1) for broadcasting
+        
         print("Starting data collection. Press Ctrl+C to stop and save data.")
         try:
             while True:
@@ -235,17 +241,22 @@ class EMARecorder:
 
                 if exg_data and exg_timestamps:
                     # exg_data shape: (N, num_exg_channels)
-                    # We'll convert and apply EMA for each sample and each span
                     exg_data = np.array(exg_data, dtype=self.exg_dtype)
-                    new_exg_samples = np.zeros((len(exg_data), len(self.ema_spans), self.num_exg_channels), dtype=self.exg_dtype)
+                    exg_data = np.abs(exg_data, out=exg_data)
+                    
+                    # Initialize array to store EMA
+                    num_samples = len(exg_data)
+                    new_exg_samples = np.zeros((num_samples, len(self.ema_spans), self.num_exg_channels), dtype=self.exg_dtype)
 
-                    for i, sample in enumerate(exg_data):
-                        sample[:] = np.abs(sample)
-                        # Apply EMA for each span
-                        for s_idx, span in enumerate(self.ema_spans):
-                            alpha = self.span_to_alpha(span)
-                            self.prev_ema_values[s_idx] = alpha * sample + (1 - alpha) * self.prev_ema_values[s_idx]
-                            new_exg_samples[i, s_idx, :] = self.prev_ema_values[s_idx]
+                    for i in range(num_samples):
+                        sample = exg_data[i]  # Shape: (num_channels,)
+                        # Update EMA: alpha * sample + (1 - alpha) * prev_ema
+                        # Vectorized Equivalent
+                        # self.prev_ema_values = alphas * sample + (1 - alphas) * self.prev_ema_values
+                        # Inplace Equivalent
+                        self.prev_ema_values *= 1 - alphas
+                        self.prev_ema_values += alphas * sample
+                        new_exg_samples[i] = self.prev_ema_values
 
                     # Append the processed exg data and timestamps
                     self.exg_buffer.extend(new_exg_samples)
@@ -294,10 +305,8 @@ class EMARecorder:
         angle_timestamps = angle_timestamps[angle_mask]
         angle_samples = angle_samples[angle_mask]
 
-        # exg_samples shape: (N, len(ema_spans), num_exg_channels)
-        # Need to reshape to (N, len(ema_spans)*num_exg_channels)
-        N = exg_samples.shape[0]
-        exg_samples_reshaped = exg_samples.reshape(N, len(self.ema_spans)*self.num_exg_channels)
+        # (N, len(ema_spans), num_exg_channels) -> (N, len(ema_spans)*num_exg_channels)
+        exg_samples_reshaped = exg_samples.reshape(-1, len(self.ema_spans)*self.num_exg_channels)
 
         # Create DataFrames
         exg_df = pd.DataFrame(exg_samples_reshaped, index=exg_timestamps, columns=self.exg_span_names)
