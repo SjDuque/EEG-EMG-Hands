@@ -383,8 +383,8 @@ def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        csv_filename="data/s_2/ema_data",
-        ema_spans=[1, 2, 4, 8, 16, 32, 64]  # example spans
+        csv_filename="data/s_1/ema_data",
+        ema_spans=[1, 2, 4, 8, 16, 32, 64]
     )
     recorder.collect_data()
 
