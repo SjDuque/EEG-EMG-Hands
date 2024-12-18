@@ -4,9 +4,10 @@ PyQt5-sip
 pyqtgraph
 brainflow
 pylsl
-opencv-python
+opencv-contrib-python
 tensorflow
 numpy
 pandas
 matplotlib
 pyserial
+mediapipe
