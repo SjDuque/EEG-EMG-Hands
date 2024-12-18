@@ -33,8 +33,10 @@ def mediapipe_client_send_serial():
     NUM_SERVOS = 5  # Thumb, Index, Middle, Ring, Pinky
     SERVO_MIN = 0
     SERVO_MAX = 180
-    
+
     LEFT_HAND = True
+
+    START_BYTE = 0xAA  # Must match the Arduino's start byte
     # ---------------------------------------------------
 
     # Initialize serial connection
@@ -58,7 +60,7 @@ def mediapipe_client_send_serial():
         print(f"No {LSL_STATUS_NAME} stream found.")
         return
 
-    inlet_status= pylsl.StreamInlet(streams[0], processing_flags=pylsl.proc_ALL)
+    inlet_status = pylsl.StreamInlet(streams[0], processing_flags=pylsl.proc_ALL)
 
     # Define finger indices for percentages (assuming order: thumb, index, middle, ring, pinky)
     finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
@@ -74,28 +76,37 @@ def mediapipe_client_send_serial():
             if not status_samples:
                 time.sleep(0.1)
                 continue
-            
+
             status_samples = status_samples[-1]  # Use the latest sample
-            for i in range(len(status_samples)):
+            # Assuming status_samples has at least NUM_SERVOS elements
+            if len(status_samples) < NUM_SERVOS:
+                print("Insufficient data received from LSL stream.")
+                continue
 
-                servo_angles = []
-                for i in range(NUM_SERVOS):
-                    if LEFT_HAND:
-                        a = int(status_samples[NUM_SERVOS-1-i] * (SERVO_MAX - SERVO_MIN) + SERVO_MIN)
-                    else:
-                        a = int(status_samples[NUM_SERVOS-1-i] * (SERVO_MAX - SERVO_MIN) + SERVO_MIN)
-                    servo_angles.append(a)
+            servo_angles = []
+            for i in range(NUM_SERVOS):
+                if LEFT_HAND:
+                    # Adjust index if necessary based on your LSL stream's data order
+                    a = int(status_samples[NUM_SERVOS - 1 - i] * (SERVO_MAX - SERVO_MIN) + SERVO_MIN)
+                else:
+                    a = int(status_samples[i] * (SERVO_MAX - SERVO_MIN) + SERVO_MIN)
+                # Constrain angle to 0-180
+                a = max(SERVO_MIN, min(a, SERVO_MAX))
+                servo_angles.append(a)
 
-                # Send angles via serial if they have changed
-                if servo_angles != prev_servo_angles:
-                    try:
-                        ser.write(bytes(servo_angles))
-                        prev_servo_angles = servo_angles.copy()
-                        # Optional: Print sent angles
-                        print(f"Sent angles: {servo_angles}")
-                    except serial.SerialException as e:
-                        print(f"Serial communication error: {e}")
-                        break
+            # Send angles via serial if they have changed
+            if servo_angles != prev_servo_angles:
+                try:
+                    packet = bytearray()
+                    packet.append(START_BYTE)
+                    packet.extend(servo_angles)
+                    ser.write(packet)
+                    prev_servo_angles = servo_angles.copy()
+                    # Optional: Print sent angles
+                    print(f"Sent angles: {servo_angles}")
+                except serial.SerialException as e:
+                    print(f"Serial communication error: {e}")
+                    break
 
     except KeyboardInterrupt:
         print("Interrupted by user.")

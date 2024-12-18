@@ -15,7 +15,11 @@ const int SERVO_MAX = 600;    // Maximum pulse length out of 4096
 const int NUM_SERVOS = 5;
 
 // Servo states: Initialize with default positions (0 or 180 degrees)
-int servo_states[NUM_SERVOS] = {180, 0, 0, 0, 0}; // Servos 0 to 4
+const int default_states[NUM_SERVOS] = {180, 0, 0, 0, 0};
+byte servo_angles[NUM_SERVOS];
+
+// Start byte for synchronization
+const byte START_BYTE = 0xAA;
 
 // Function to map degree to PWM pulse
 int degreeToPulse(int degree) {
@@ -37,35 +41,29 @@ void setup() {
 
   // Initialize all servos to their initial states
   for (int i = 0; i < NUM_SERVOS; i++) {
-    setServo(i, servo_states[i]);
+    setServo(i, default_states[i]);
   }
 }
 
 void loop() {
-  // Check if enough bytes are available (5 bytes)
-  if (Serial.available() >= NUM_SERVOS) {
-    byte servo_angles[NUM_SERVOS];
-    Serial.readBytes(servo_angles, NUM_SERVOS);
+  // Look for the start byte
+  if (Serial.available() > 0) {
+    byte incomingByte = Serial.read();
+    if (incomingByte == START_BYTE) {
+      // Check if the required number of bytes are available
+      if (Serial.available() >= NUM_SERVOS) {
+        Serial.readBytes(servo_angles, NUM_SERVOS);
 
-    // Update servo states and set servos
-    for (int i = 0; i < NUM_SERVOS; i++) {
-      int angle = servo_angles[i];
-      // Constrain angle to 0-180
-      angle = constrain(angle, 0, 180);
-      servo_states[i] = angle;
-      setServo(i, angle);
+        // Update servo states and set servos
+        for (int i = 0; i < NUM_SERVOS; i++) {
+          int angle = servo_angles[i];
+          angle = abs(default_states[i] - angle);
+          // Constrain angle to 0-180
+          angle = constrain(angle, 0, 180);
+          setServo(i, angle);
+        }
+      }
     }
-
-    // Optional: Send back confirmation
-    Serial.print("Servos updated: ");
-    for (int i = 0; i < NUM_SERVOS; i++) {
-      Serial.print("Servo ");
-      Serial.print(i);
-      Serial.print(" = ");
-      Serial.print(servo_states[i]);
-      if (i < NUM_SERVOS - 1) Serial.print(", ");
-    }
-    Serial.println();
   }
 }
 
