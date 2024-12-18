@@ -93,7 +93,7 @@ def mediapipe_client_send_serial():
 
     # Define finger indices for percentages (assuming order: thumb, index, middle, ring, pinky)
     finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-    finger_thresholds = ((0.85, 0.9), (0.7, 0.875), (0.75, 0.875), (0.7, 0.8), (0.7, 0.825))
+    finger_thresholds = ((0.75, 0.9), (0.5, 0.85), (0.5, 0.85), (0.3, 0.85), (0.3, 0.85))
 
     # Initialize previous servo angles to detect changes
     prev_servo_angles = [None] * NUM_SERVOS
