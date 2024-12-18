@@ -5,3 +5,8 @@ pyqtgraph
 brainflow
 pylsl
 opencv-python
+tensorflow
+numpy
+pandas
+matplotlib
+pyserial
