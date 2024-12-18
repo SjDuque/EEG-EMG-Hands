@@ -10,4 +10,4 @@ PYTHON=".venv/bin/python"
 SCRIPT_1="src/esp32/hand_status_client.py"
 
 # Open the first script in a new terminal
-osascript -e "tell application \"Terminal\" to do script \"cd $SCRIPT_DIR && $PYTHON $SCRIPT_1\""ß
+osascript -e "tell application \"Terminal\" to do script \"cd $SCRIPT_DIR && $PYTHON $SCRIPT_1\""
