@@ -132,6 +132,7 @@ class BrainFlowGraph(BaseGraph):
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update)
         self.timer.start(self.update_speed_ms)
+        self.time_diff = local_clock() - datetime.datetime.now().timestamp()
 
         logging.info("Entering the Qt event loop.")
         self.app.exec_()
@@ -211,8 +212,7 @@ class BrainFlowGraph(BaseGraph):
             # Extract EXG channels
             num_samples = new_data.shape[1]
             exg_data = new_data[self.exg_channels, :]  # shape: (channels, samples)
-            time_diff = local_clock() - datetime.datetime.now().timestamp()
-            timestamp_data = new_data[self.timestamp_channel, :] + time_diff
+            timestamp_data = new_data[self.timestamp_channel, :] + self.time_diff
 
             # Update timestamp buffer
             self.timestamp_buffer = np.roll(self.timestamp_buffer, -num_samples)
@@ -299,7 +299,7 @@ def main():
 
     try:
         serial_port = find_serial_port()
-        board_id = BoardIds.CYTON_DAISY_BOARD
+        board_id = BoardIds.SYNTHETIC_BOARD
         is_emg = True
 
         brainflow_graph = BrainFlowGraph(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
