@@ -1,40 +1,23 @@
 import pylsl
 import numpy as np
 import cv2
-import serial
-import serial.tools.list_ports
-import time
-import sys
+from hand_serial import HandSerial
+import json
 
-def find_serial_port(baudrate=115200, timeout=1):
-    """
-    Attempts to find the serial port connected to the ESP32.
-    Adjust this function based on your system's serial port naming conventions.
-    """
-    ports = list(serial.tools.list_ports.comports())
-    for port in ports:
-        # You can add more sophisticated checks here based on port.description or port.manufacturer
-        if "ESP32" in port.description or "USB" in port.description:
-            try:
-                ser = serial.Serial(port.device, baudrate, timeout=timeout)
-                ser.close()
-                return port.device
-            except (OSError, serial.SerialException):
-                continue
-    return None
+# Load the JSON data from the file
+def load_finger_thresholds():
+    with open('config/finger_thresholds.json', 'r') as file:
+        data = json.load(file)
+
+    # Convert lists back to tuples if necessary
+    finger_thresholds = tuple(tuple(pair) for pair in data['finger_thresholds'])
+
+    return finger_thresholds
 
 def mediapipe_client_send_serial():
     # ------------------ Configuration ------------------
-    SERIAL_BAUD_RATE = 115200
-    SERIAL_TIMEOUT = 1  # in seconds
-    SERIAL_PORT = None  # Set to None to auto-detect
-
     LSL_HAND_LANDMARKS_NAME = "HandLandmarks"
     LSL_FINGER_PERCENTAGES_NAME = "FingerPercentages"
-
-    NUM_SERVOS = 5  # Thumb, Index, Middle, Ring, Pinky
-    SERVO_MIN = 0
-    SERVO_MAX = 180
 
     img_size = 360
     scale = img_size  # to scale x,y from [0,1] to image coordinates
@@ -53,18 +36,7 @@ def mediapipe_client_send_serial():
     # ---------------------------------------------------
 
     # Initialize serial connection
-    if SERIAL_PORT is None:
-        SERIAL_PORT = find_serial_port(baudrate=SERIAL_BAUD_RATE, timeout=SERIAL_TIMEOUT)
-        if SERIAL_PORT is None:
-            print("Could not find ESP32 serial port. Please specify it manually in the script.")
-            sys.exit(1)
-    try:
-        ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD_RATE, timeout=SERIAL_TIMEOUT)
-        time.sleep(2)  # Wait for serial connection to initialize
-        print(f"Connected to ESP32 on {SERIAL_PORT}")
-    except serial.SerialException as e:
-        print(f"Failed to connect to ESP32 on {SERIAL_PORT}: {e}")
-        sys.exit(1)
+    ser = HandSerial(serial_port='/dev/cu.usbserial-310', left_hand=True)
 
     # Resolve LSL streams
     print("Looking for HandLandmarks stream...")
@@ -93,10 +65,8 @@ def mediapipe_client_send_serial():
 
     # Define finger indices for percentages (assuming order: thumb, index, middle, ring, pinky)
     finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-    finger_thresholds = ((0.75, 0.9), (0.5, 0.85), (0.5, 0.85), (0.3, 0.85), (0.3, 0.85))
-
-    # Initialize previous servo angles to detect changes
-    prev_servo_angles = [None] * NUM_SERVOS
+    finger_thresholds = load_finger_thresholds()
+    print(f"Finger thresholds: {finger_thresholds}")
 
     try:
         while True:
@@ -112,29 +82,15 @@ def mediapipe_client_send_serial():
                         percentage_sample[i] = 0.5
                     else:
                         percentage_sample[i] = (percentage_sample[i] - finger_thresholds[i][0]) / (finger_thresholds[i][1] - finger_thresholds[i][0])
-                        percentage_sample[i] = np.clip(percentage_sample[i], 0, 1)
-                        
+                        percentage_sample[i] = max(0, min(1, percentage_sample[i]))
             else:
                 landmark_sample = None
                 percentage_sample = None
+                
+            # Send finger percentages to ESP32
+            ser.send_serial(percentage_sample)
 
-            if (landmark_sample is not None and len(landmark_sample) == num_landmarks * 3) and (percentage_sample is not None and len(percentage_sample) >= NUM_SERVOS):
-                # Map finger percentages to servo angles
-                servo_angles = []
-                for i in range(NUM_SERVOS):
-                    a = int(percentage_sample[i] * (SERVO_MAX - SERVO_MIN) + SERVO_MIN)
-                    servo_angles.append(a)
-
-                # Send angles via serial if they have changed
-                if servo_angles != prev_servo_angles:
-                    try:
-                        ser.write(bytes(servo_angles))
-                        prev_servo_angles = servo_angles.copy()
-                        # Optional: Print sent angles
-                        print(f"Sent angles: {servo_angles}")
-                    except serial.SerialException as e:
-                        print(f"Serial communication error: {e}")
-                        break
+            if landmark_sample is not None:
                     
                 # Convert landmarks to (21, 3)
                 coords = np.array(landmark_sample).reshape(num_landmarks, 3)
@@ -159,7 +115,7 @@ def mediapipe_client_send_serial():
                     # Optionally, display finger percentages
                     finger_texts = []
                     percentage_texts = []
-                    for i, a in enumerate(percentage_sample[:NUM_SERVOS]):
+                    for i, a in enumerate(percentage_sample[:len(finger_names)]):
                         finger_texts.append(finger_names[i])
                         if np.isnan(a):
                             percentage_texts.append(f"NaN")

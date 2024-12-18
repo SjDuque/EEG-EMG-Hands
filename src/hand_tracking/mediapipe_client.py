@@ -1,17 +1,28 @@
 import pylsl
 import numpy as np
 import cv2
+import json
+
+# Load the JSON data from the file
+def load_finger_thresholds():
+    with open('config/finger_thresholds.json', 'r') as file:
+        data = json.load(file)
+
+    # Convert lists back to tuples if necessary
+    finger_thresholds = tuple(tuple(pair) for pair in data['finger_thresholds'])
+
+    return finger_thresholds
 
 def mediapipe_client_lsl():
     # Resolve streams
     print("Looking for HandLandmarks stream...")
-    streams_landmarks = pylsl.resolve_stream("name", "HandLandmarks")
+    streams_landmarks = pylsl.resolve_byprop("name", "HandLandmarks")
     if not streams_landmarks:
         print("No HandLandmarks stream found.")
         return
 
     print("Looking for FingerPercentages stream...")
-    streams_angles = pylsl.resolve_stream("name", "FingerPercentages")
+    streams_angles = pylsl.resolve_byprop("name", "FingerPercentages")
     if not streams_angles:
         print("No FingerPercentages stream found.")
         return
@@ -52,7 +63,7 @@ def mediapipe_client_lsl():
     }
     
     # Thumb, index, middle, ring, pinky
-    finger_thresholds = ((0.85, 0.9), (0.7, 0.875), (0.75, 0.875), (0.7, 0.8), (0.7, 0.825))
+    finger_thresholds = load_finger_thresholds()
     # Ring finger and pinky are often linked to another finger, so their thresholds
     # may be lower than the others.
     # For example, when I move my left pinky, my ring finger moves.
