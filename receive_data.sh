@@ -4,14 +4,14 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Path to the virtual environment's Python
-PYTHON="$SCRIPT_DIR/.conda/bin/python"
+PYTHON=".venv/bin/python"
 
 # Path to the Python scripts (relative to the script location)
-SCRIPT_1="$SCRIPT_DIR/src/hand_tracking/mediapipe_client.py"
-SCRIPT_2="$SCRIPT_DIR/src/openbci/brainflow_client.py"
+SCRIPT_1="src/hand_tracking/mediapipe_client.py"
+SCRIPT_2="src/openbci/brainflow_client.py"
 
 # Open the first script in a new terminal
-osascript -e "tell application \"Terminal\" to do script \"$PYTHON $SCRIPT_1\""
+osascript -e "tell application \"Terminal\" to do script \"cd $SCRIPT_DIR && $PYTHON $SCRIPT_1\""
 
 # Open the second script in another new terminal
-osascript -e "tell application \"Terminal\" to do script \"$PYTHON $SCRIPT_2\""
+osascript -e "tell application \"Terminal\" to do script \"cd $SCRIPT_DIR && $PYTHON $SCRIPT_2\""
