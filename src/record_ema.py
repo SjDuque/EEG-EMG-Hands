@@ -4,6 +4,7 @@ from pylsl import StreamInlet, resolve_byprop
 import pylsl  
 import time
 import pandas as pd
+import os
 
 class NumpyBuffer:
     def __init__(self, init_capacity, shape, dtype):
@@ -113,10 +114,17 @@ class NumpyBuffer:
         return data
 
 class EMARecorder:
+    """
+    _summary_: Class to record EXG and Angle data from LSL streams and save to CSV files.
+    Applies exponential moving average to the EXG data.
+    """
     def __init__(self,
                  exg_stream_name:str ="filtered_exg",
                  angle_stream_name:str ="FingerPercentages",
-                 csv_filename:str ="data/ema_data",
+                 csv_dir:str ="data/session",
+                 save_exg:bool =True,
+                 save_angle:bool =True,
+                 save_merged:bool =True,
                  init_capacity_s:float =1024,
                  ema_spans:tuple =(1, 2, 4, 8, 16, 32, 64)
                  ):
@@ -125,13 +133,19 @@ class EMARecorder:
 
         :param exg_stream_name: Name of the EMG stream.
         :param angle_stream_name: Name of the Angle stream.
-        :param csv_filename: Output CSV file name.
+        :param csv_dir: Output CSV files directory.
         :param ema_spans: Exponential moving average spans.
         """
         self.exg_stream_name = exg_stream_name
         self.angle_stream_name = angle_stream_name
-        self.csv_filename = csv_filename
+        self.csv_dir = csv_dir
         self.ema_spans = ema_spans
+        
+        self.save_exg = save_exg
+        self.save_angle = save_angle
+        self.save_merged = save_merged
+        
+        self.start_time = int(pylsl.local_clock() * 1000)
 
         # Resolve streams
         print("Resolving EMG (EXG) stream...")
@@ -314,7 +328,10 @@ class EMARecorder:
             self.save_data()
             
     def get_data(self):
-        """Synchronizes and clears all buffered data, then returns as a DataFrame."""
+        """
+        Synchronizes the buffered data and returns as DataFrames,
+        Returns: Tuple of DataFrames (ema_df, angle_df, merged_df)
+        """
         # Get EXG data
         if self.angle_buffer.size == 0 or self.ema_buffer.size <= self.ema_buffer_start:
             return None
@@ -340,9 +357,6 @@ class EMARecorder:
         angle_timestamps = angle_timestamps[angle_mask]
         angle_samples = angle_samples[angle_mask]
         
-        # Raw EXG samples
-        # raw_ema_samples = ema_samples[:, :, 0]  # Shape: (N, num_exg_channels)
-
         # (N, num_exg_channels, len(ema_spans)) -> (N, self.num_exg_channels * len(self.ema_spans))
         ema_shape = ema_samples.shape
         ema_samples_reshaped = ema_samples.reshape(-1, ema_shape[-1] * ema_shape[-2])
@@ -359,35 +373,63 @@ class EMARecorder:
         tolerance = pd.to_timedelta(self.update_time, unit='s')
         merged_df = pd.merge_asof(angle_df, ema_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
         
-        if merged_df.empty:
-            return None
+        # Convert time index to milliseconds formatted as integers
+        ema_df.index = (ema_df.index.total_seconds() * 1000).round().astype(int)
+        angle_df.index = (angle_df.index.total_seconds() * 1000).round().astype(int)
+        merged_df.index = (merged_df.index.total_seconds() * 1000).round().astype(int)
         
-        # Convert timestamps to milliseconds
-        merged_df.index = (merged_df.index.total_seconds() * 10**3).round().astype(int)
-        # Subtract the first timestamp to start from 0
-        merged_df.index -= merged_df.index[0]
-        # Name index as 'timestamp'
+        # Set index name
+        ema_df.index.name = 'timestamp'
+        angle_df.index.name = 'timestamp'
         merged_df.index.name = 'timestamp'
         
-        return merged_df
+        # Set start time to 0
+        self.start_time = min(ema_df.index[0], angle_df.index[0], merged_df.index[0], self.start_time)
+        ema_df.index -= self.start_time
+        angle_df.index -= self.start_time
+        merged_df.index -= self.start_time
+        
+        return ema_df, angle_df, merged_df
 
     def save_data(self):
         """Synchronizes all buffered data and writes to the CSV file."""
-        df = self.get_data()
+        ema_df, angle_df, merged_df = self.get_data()
+        
+        # Create CSV directory if it does not exist
+        if not os.path.exists(self.csv_dir):
+            os.makedirs(self.csv_dir)
 
         # Save to CSV
-        file_name = f"{self.csv_filename}_{int(time.time())}.csv"
-        df.to_csv(file_name)
-
-        print(f"Data saved to '{file_name}'. Exiting...")
+        timestamp = int(time.time())
+        
+        # Save dataframes to CSV files
+        if self.save_exg:
+            if not os.path.exists(f"{self.csv_dir}/exg"):
+                os.makedirs(f"{self.csv_dir}/exg")
+            ema_filename = f"{self.csv_dir}/exg/data_{timestamp}.csv"
+            ema_df.to_csv(ema_filename)
+            print(f"EMA Dataframe saved to '{ema_filename}'.")
+        
+        if self.save_angle:
+            if not os.path.exists(f"{self.csv_dir}/angle"):
+                os.makedirs(f"{self.csv_dir}/angle")
+            angle_filename = f"{self.csv_dir}/angle/data_{timestamp}.csv"
+            angle_df.to_csv(angle_filename)
+            print(f"Angle Dataframe saved to '{angle_filename}'.")
+        
+        if self.save_merged:
+            merged_filename = f"{self.csv_dir}/data_{timestamp}.csv"
+            merged_df.to_csv(merged_filename)
+            print(f"Merged Dataframe saved to '{merged_filename}'.")
 
 
 def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        csv_filename="data/s_4/ema_data",
-        ema_spans=[1, 2, 4, 8, 16, 32, 64]
+        csv_dir="data/s_4",
+        ema_spans=[1, 2, 4, 8, 16, 32, 64],
+        
     )
     recorder.collect_and_save_loop()
 
