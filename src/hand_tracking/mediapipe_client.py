@@ -64,10 +64,6 @@ def mediapipe_client_lsl():
     
     # Thumb, index, middle, ring, pinky
     finger_thresholds = load_finger_thresholds()
-    # Ring finger and pinky are often linked to another finger, so their thresholds
-    # may be lower than the others.
-    # For example, when I move my left pinky, my ring finger moves.
-    # Or if I move my right middle finger, my ring finger moves.
 
     while True:
         # Pull samples
