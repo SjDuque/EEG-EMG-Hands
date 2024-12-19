@@ -418,7 +418,9 @@ class EMARecorder:
             print(f"Angle Dataframe saved to '{angle_filename}'.")
         
         if self.save_merged:
-            merged_filename = f"{self.csv_dir}/data_{timestamp}.csv"
+            if not os.path.exists(f"{self.csv_dir}/merged"):
+                os.makedirs(f"{self.csv_dir}/merged")
+            merged_filename = f"{self.csv_dir}/merged/data_{timestamp}.csv"
             merged_df.to_csv(merged_filename)
             print(f"Merged Dataframe saved to '{merged_filename}'.")
 
