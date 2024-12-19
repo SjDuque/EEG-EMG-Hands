@@ -36,7 +36,7 @@ def mediapipe_client_send_serial():
     # ---------------------------------------------------
 
     # Initialize serial connection
-    ser = HandSerial(serial_port='/dev/cu.usbserial-310', left_hand=True)
+    ser = HandSerial(serial_port='/dev/cu.usbserial-120', left_hand=True)
 
     # Resolve LSL streams
     print("Looking for HandLandmarks stream...")
