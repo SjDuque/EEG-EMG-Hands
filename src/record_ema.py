@@ -145,7 +145,7 @@ class EMARecorder:
         self.save_angle = save_angle
         self.save_merged = save_merged
         
-        self.start_time = int(pylsl.local_clock() * 1000)
+        self.start_time = float('inf')
 
         # Resolve streams
         print("Resolving EMG (EXG) stream...")
@@ -160,8 +160,8 @@ class EMARecorder:
 
         # Create inlets
         proc_flags = pylsl.proc_clocksync | pylsl.proc_dejitter | pylsl.proc_monotonize
-        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=2, processing_flags=proc_flags)
-        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=2, processing_flags=proc_flags)
+        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=512, processing_flags=proc_flags)
+        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=512, processing_flags=proc_flags)
 
         # Get stream info
         exg_info = self.exg_inlet.info()
@@ -371,7 +371,12 @@ class EMARecorder:
 
         # Merge as-of nearest timestamp
         tolerance = pd.to_timedelta(self.update_time, unit='s')
-        merged_df = pd.merge_asof(angle_df, ema_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
+        
+        # Merge EMA and Angle dataframes, using whichever has a slower sampling rate
+        if self.exg_rate < self.angle_rate:
+            merged_df = pd.merge_asof(ema_df, angle_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
+        else:
+            merged_df = pd.merge_asof(angle_df, ema_df, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
         
         # Convert time index to milliseconds formatted as integers
         ema_df.index = (ema_df.index.total_seconds() * 1000).round().astype(int)
@@ -384,7 +389,7 @@ class EMARecorder:
         merged_df.index.name = 'timestamp'
         
         # Set start time to 0
-        self.start_time = min(ema_df.index[0], angle_df.index[0], merged_df.index[0], self.start_time)
+        self.start_time = int(min(ema_df.index[0], angle_df.index[0], merged_df.index[0], self.start_time))
         ema_df.index -= self.start_time
         angle_df.index -= self.start_time
         merged_df.index -= self.start_time
