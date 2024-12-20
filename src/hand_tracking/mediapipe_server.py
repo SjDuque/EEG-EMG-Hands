@@ -34,16 +34,9 @@ process_q = queue.Queue(maxsize=2)
 landmark_q = queue.Queue(maxsize=2)
 display_landmark_q = queue.Queue(maxsize=2)
 
-left_hand = True
 status_labels = ['thumb', 'index', 'middle', 'ring', 'pinky']
 status_labels_idx = {label: i for i, label in enumerate(status_labels)}
 status_groups = ['thumb', 'index', 'middle', ['ring', 'pinky']]
-
-# Status guides the user on which fingers to raise given a visual prompt
-if left_hand:
-    status_labels = status_labels[::-1]
-    status_labels_idx = {label: i for i, label in enumerate(status_labels)}
-    status_groups = status_groups[::-1]
 
 def generate_status_lists():
     result = []
