@@ -148,6 +148,7 @@ class EMARecorder:
         self.save_status = save_status
     
         self.update_interval = update_interval
+        self.start_time = float('inf')
         
         # Processing Flags
         proc_flags = pylsl.proc_clocksync | pylsl.proc_dejitter | pylsl.proc_monotonize
@@ -159,7 +160,7 @@ class EMARecorder:
         if not exg_streams:
             raise RuntimeError(f"No EMG stream found with name '{self.exg_stream_name}'.")
 
-        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=512, processing_flags=proc_flags)
+        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=1024, processing_flags=proc_flags)
         exg_info = self.exg_inlet.info()
         self.exg_rate = exg_info.nominal_srate()
         if self.exg_rate <= 0:
@@ -175,7 +176,7 @@ class EMARecorder:
         if not angle_streams:
             raise RuntimeError(f"No angle stream found with name '{self.angle_stream_name}'.")
         
-        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=512, processing_flags=proc_flags)
+        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=1024, processing_flags=proc_flags)
         angle_info = self.angle_inlet.info()
         self.angle_rate = angle_info.nominal_srate()
         if self.angle_rate <= 0:
@@ -190,7 +191,7 @@ class EMARecorder:
         self.status_stream_name = status_stream_name
         print("Resolving status stream...")
         status_streams = resolve_byprop('name', self.status_stream_name, timeout=5)
-        self.status_inlet = StreamInlet(status_streams[0], max_buflen=512, processing_flags=proc_flags)
+        self.status_inlet = StreamInlet(status_streams[0], max_buflen=1024, processing_flags=proc_flags)
         status_info = self.status_inlet.info()
         self.status_rate = status_info.nominal_srate()
         if self.status_rate <= 0:
@@ -204,6 +205,7 @@ class EMARecorder:
         # Initialize buffers using NumpyBuffer
         ema_dtype = np.float32
         mp_dtype = np.float32
+        status_dtype = np.int8
         timestamp_dtype = np.float64
         init_capacity_ema = int(init_capacity_s * self.exg_rate)
         init_capacity_angle = int(init_capacity_s * self.angle_rate)
@@ -222,7 +224,7 @@ class EMARecorder:
         self.angle_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=angle_shape, dtype=mp_dtype)
         self.angle_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=timestamp_shape, dtype=timestamp_dtype)
         
-        self.status_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=status_shape, dtype=mp_dtype)
+        self.status_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=status_shape, dtype=status_dtype)
         self.status_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=timestamp_shape, dtype=timestamp_dtype)
         
         self.alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.ema_dtype)  # Shape: (num_spans,)
@@ -386,7 +388,7 @@ class EMARecorder:
         Returns: Tuple of DataFrames (ema_df, angle_df, merged_df)
         """
         start_time = -1
-        end_time = float('inf')
+        end_time = pylsl.local_clock()
         
         angle_df = None
         if self.angle_buffer.size > 0:
@@ -400,6 +402,7 @@ class EMARecorder:
             # Create DataFrame
             angle_df = pd.DataFrame(angle_samples, index=angle_timestamps, columns=self.mp_channel_names)
             # Update start and end times
+            self.start_time = min(self.start_time, angle_timestamps[0])
             start_time = max(start_time, angle_timestamps[0])
             end_time = min(end_time, angle_timestamps[-1])
             # Set to None if empty
@@ -422,6 +425,7 @@ class EMARecorder:
             # Create DataFrame
             ema_df = pd.DataFrame(ema_samples, index=ema_timestamps, columns=self.exg_span_names)
             # Update start and end times
+            self.start_time = min(self.start_time, ema_timestamps[0])
             start_time = max(start_time, ema_timestamps[0])
             end_time = min(end_time, ema_timestamps[-1])
             # Set to None if empty
@@ -440,18 +444,22 @@ class EMARecorder:
             # Create DataFrame
             status_df = pd.DataFrame(status_samples, index=status_timestamps, columns=self.status_channel_names)
             # Update start and end times
-            start_time = max(start_time, status_timestamps[0])
-            end_time = min(end_time, status_timestamps[-1])
+            self.start_time = min(self.start_time, status_timestamps[0])
             # Set to None if empty
             if status_df.empty:
                 status_df = None
+                
+        if self.start_time == float('inf'):
+            self.start_time = 0
         
+        subtract_time = pd.to_timedelta(self.start_time, unit='s')
         start_time = pd.to_timedelta(start_time, unit='s')
         end_time = pd.to_timedelta(end_time, unit='s')
         ema_df_masked = None    
         if ema_df is not None:
             ema_df.index = pd.to_timedelta(ema_df.index, unit='s')
             ema_mask = (ema_df.index >= start_time) & (ema_df.index <= end_time)
+            ema_df.index -= subtract_time
             ema_df_masked = ema_df[ema_mask]
             ema_df.index = (ema_df.index.total_seconds() * 1000).round().astype(int)
             ema_df.index.name = 'timestamp'
@@ -460,26 +468,24 @@ class EMARecorder:
         if angle_df is not None:
             angle_df.index = pd.to_timedelta(angle_df.index, unit='s')
             angle_mask = (angle_df.index >= start_time) & (angle_df.index <= end_time)
+            angle_df.index -= subtract_time
             angle_df_masked = angle_df[angle_mask]
             angle_df.index = (angle_df.index.total_seconds() * 1000).round().astype(int)
             angle_df.index.name = 'timestamp'
             
-        status_df_masked = None
         if status_df is not None:
             status_df.index = pd.to_timedelta(status_df.index, unit='s')
-            status_mask = (status_df.index >= start_time) & (status_df.index <= end_time)
-            status_df_masked = status_df[status_mask]
+            status_df.index -= subtract_time
             status_df.index = (status_df.index.total_seconds() * 1000).round().astype(int)
             status_df.index.name = 'timestamp'
             
         merged_df = None
-        if self.save_merged and (ema_df_masked is not None and angle_df_masked is not None and status_df_masked is not None):
+        if self.save_merged and (ema_df_masked is not None and angle_df_masked is not None):
             # Merge as-of nearest timestamp
             tolerance = min(1/self.angle_rate, 1/self.exg_rate)
             tolerance = pd.to_timedelta(tolerance, unit='s')
             
-            merged_df = pd.merge_asof(angle_df_masked, status_df_masked, left_index=True, right_index=True, direction='backward')
-            merged_df = pd.merge_asof(merged_df, ema_df_masked, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
+            merged_df = pd.merge_asof(angle_df_masked, ema_df_masked, left_index=True, right_index=True, direction='nearest', tolerance=tolerance)
             merged_df.index = (merged_df.index.total_seconds() * 1000).round().astype(int)
             merged_df.index.name = 'timestamp'
         
@@ -489,7 +495,7 @@ class EMARecorder:
         """Synchronizes all buffered data and writes to the CSV file."""
         ema_df, angle_df, status_df, merged_df = self.get_data()
         
-        if ema_df is None or angle_df is None or merged_df is None:
+        if ema_df is None and angle_df is None and merged_df is None:
             print("No data to save.")
             return
         
