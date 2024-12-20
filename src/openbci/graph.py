@@ -64,7 +64,7 @@ class BaseGraph:
                 p.setTitle('Time Series Data')
 
             # Set fixed y-axis limits for the plot (adjust as per your data)
-            p.setYRange(-500, 500)
+            p.setYRange(-250, 250)
 
             # Label each channel
             p.getAxis('left').setLabel(f'Ch {i+1}')
