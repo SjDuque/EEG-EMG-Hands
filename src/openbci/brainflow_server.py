@@ -299,12 +299,12 @@ def main():
 
     try:
         serial_port = find_serial_port()
-        board_id = BoardIds.SYNTHETIC_BOARD
+        board_id = BoardIds.CYTON_BOARD
         is_emg = True
 
         brainflow_graph = BrainFlowGraph(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
                                          lsl_raw=False, lsl_filtered=True,
-                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8])
     except RuntimeError as e:
         logging.error(f"RuntimeError: {e}")
         sys.exit(1)
