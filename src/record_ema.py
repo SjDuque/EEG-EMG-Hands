@@ -148,105 +148,109 @@ class EMARecorder:
         self.save_status = save_status
     
         self.update_interval = update_interval
-        self.start_time = float('inf')
+        self.subtract_time = float('inf')
         
         # Processing Flags
         proc_flags = pylsl.proc_clocksync | pylsl.proc_dejitter | pylsl.proc_monotonize
+        timestamp_dtype = np.float64
+        timestamp_shape = ()
 
         # EXG Stream
-        self.exg_stream_name = exg_stream_name
-        print("Resolving EMG (EXG) stream...")
-        exg_streams = resolve_byprop('name', self.exg_stream_name, timeout=5)
-        if not exg_streams:
-            raise RuntimeError(f"No EMG stream found with name '{self.exg_stream_name}'.")
+        if self.has_exg:
+            self.exg_stream_name = exg_stream_name
+            print("Resolving EMG (EXG) stream...")
+            exg_streams = resolve_byprop('name', self.exg_stream_name, timeout=5)
+            if not exg_streams:
+                raise RuntimeError(f"No EMG stream found with name '{self.exg_stream_name}'.")
 
-        self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=1024, processing_flags=proc_flags)
-        exg_info = self.exg_inlet.info()
-        self.exg_rate = exg_info.nominal_srate()
-        if self.exg_rate <= 0:
-            raise ValueError("EMG stream sampling rate is not set or zero.")
-        self.num_exg_channels = exg_info.channel_count()
-        if self.num_exg_channels <= 0:
-            raise ValueError("EMG stream channel_count is not set or zero.")
+            self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=1024, processing_flags=proc_flags)
+            exg_info = self.exg_inlet.info()
+            self.exg_rate = exg_info.nominal_srate()
+            if self.exg_rate <= 0:
+                raise ValueError("EMG stream sampling rate is not set or zero.")
+            self.num_exg_channels = exg_info.channel_count()
+            if self.num_exg_channels <= 0:
+                raise ValueError("EMG stream channel_count is not set or zero.")
+            
+            # Buffer
+            ema_dtype = np.float32
+            init_capacity_ema = int(init_capacity_s * self.exg_rate)
+            ema_shape = (self.num_exg_channels, len(self.ema_spans) + 1)
+            
+            self.ema_buffer = NumpyBuffer(init_capacity=init_capacity_ema, shape=ema_shape, dtype=ema_dtype)
+            self.ema_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_ema, shape=(), dtype=np.float64)
+            
+            self.alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.ema_dtype)  # Shape: (num_spans,)
+            self.alphas = self.alphas[np.newaxis, :]
+            
+            # Initialize EMA values
+            prev_ema_shape = (self.num_exg_channels, len(self.ema_spans))
+            self.prev_ema_values = np.zeros(prev_ema_shape, dtype=ema_dtype)
+            
+            self.ema_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
+            
+            # Channel -> Span
+            self.ema_span_names = [f"ch_{i+1}_ema_{span}" for i in range(self.num_exg_channels) for span in self.ema_spans]
+            self.exg_span_names = []
+            
+            for i in range(self.num_exg_channels):
+                self.exg_span_names.append(f"ch_{i+1}_raw")
+                for span in self.ema_spans:
+                    self.exg_span_names.append(f"ch_{i+1}_ema_{span}")
+
+            print(f'EMG Span channel names: {self.exg_span_names}')
 
         # Angle Stream
-        self.angle_stream_name = angle_stream_name
-        print("Resolving angle (MP) stream...")
-        angle_streams = resolve_byprop('name', self.angle_stream_name, timeout=5)
-        if not angle_streams:
-            raise RuntimeError(f"No angle stream found with name '{self.angle_stream_name}'.")
-        
-        self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=1024, processing_flags=proc_flags)
-        angle_info = self.angle_inlet.info()
-        self.angle_rate = angle_info.nominal_srate()
-        if self.angle_rate <= 0:
-            raise ValueError("Angle stream sampling rate is not set or zero.")
-        self.num_angle_channels = angle_info.channel_count()
-        if self.num_angle_channels <= 0:
-            raise ValueError("Angle stream channel_count is not set or zero.")
-        
-        self.mp_channel_names = self._get_angle_channel_names(angle_info)
+        if self.has_angle:
+            self.angle_stream_name = angle_stream_name
+            print("Resolving angle (MP) stream...")
+            angle_streams = resolve_byprop('name', self.angle_stream_name, timeout=5)
+            if not angle_streams:
+                raise RuntimeError(f"No angle stream found with name '{self.angle_stream_name}'.")
+            
+            self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=1024, processing_flags=proc_flags)
+            angle_info = self.angle_inlet.info()
+            self.angle_rate = angle_info.nominal_srate()
+            if self.angle_rate <= 0:
+                raise ValueError("Angle stream sampling rate is not set or zero.")
+            self.num_angle_channels = angle_info.channel_count()
+            if self.num_angle_channels <= 0:
+                raise ValueError("Angle stream channel_count is not set or zero.")
+            
+            self.angle_channel_names = self._get_angle_channel_names(angle_info)
+            # Buffer
+            angle_dtype = np.float32
+            init_capacity_angle = int(init_capacity_s * self.angle_rate)
+            angle_shape = (self.num_angle_channels,)
+            
+            self.angle_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=angle_shape, dtype=angle_dtype)
+            self.angle_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=(), dtype=np.float64)
+            
+            print(f'Angle channel names: {self.angle_channel_names}')
         
         # Status Stream
-        self.status_stream_name = status_stream_name
-        print("Resolving status stream...")
-        status_streams = resolve_byprop('name', self.status_stream_name, timeout=5)
-        self.status_inlet = StreamInlet(status_streams[0], max_buflen=1024, processing_flags=proc_flags)
-        status_info = self.status_inlet.info()
-        self.status_rate = status_info.nominal_srate()
-        if self.status_rate <= 0:
-            raise ValueError("Status stream sampling rate is not set or zero.")
-        self.num_status_channels = status_info.channel_count()
-        if self.num_status_channels <= 0:
-            raise ValueError("Status stream channel_count is not set or zero.")
+        if self.has_status:
+            self.status_stream_name = status_stream_name
+            print("Resolving status stream...")
+            status_streams = resolve_byprop('name', self.status_stream_name, timeout=5)
+            self.status_inlet = StreamInlet(status_streams[0], max_buflen=1024, processing_flags=proc_flags)
+            status_info = self.status_inlet.info()
+            self.status_rate = status_info.nominal_srate()
+            if self.status_rate <= 0:
+                raise ValueError("Status stream sampling rate is not set or zero.")
+            self.num_status_channels = status_info.channel_count()
+            if self.num_status_channels <= 0:
+                raise ValueError("Status stream channel_count is not set or zero.")
+            
+            self.status_channel_names = self._get_status_channel_names(status_info)
         
-        self.status_channel_names = self._get_status_channel_names(status_info)
-
-        # Initialize buffers using NumpyBuffer
-        ema_dtype = np.float32
-        mp_dtype = np.float32
-        status_dtype = np.int8
-        timestamp_dtype = np.float64
-        init_capacity_ema = int(init_capacity_s * self.exg_rate)
-        init_capacity_angle = int(init_capacity_s * self.angle_rate)
-        init_capacity_status = int(init_capacity_s * self.status_rate)
-        
-        # Buffer shapes
-        timestamp_shape = ()
-        ema_shape = (self.num_exg_channels, len(self.ema_spans) + 1)
-        angle_shape = (self.num_angle_channels,)
-        status_shape = (self.num_status_channels,)
-        
-        # Initialize buffers
-        self.ema_buffer = NumpyBuffer(init_capacity=init_capacity_ema, shape=ema_shape, dtype=ema_dtype)
-        self.ema_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_ema, shape=timestamp_shape, dtype=timestamp_dtype)
-
-        self.angle_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=angle_shape, dtype=mp_dtype)
-        self.angle_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_angle, shape=timestamp_shape, dtype=timestamp_dtype)
-        
-        self.status_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=status_shape, dtype=status_dtype)
-        self.status_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=timestamp_shape, dtype=timestamp_dtype)
-        
-        self.alphas = np.array([self.span_to_alpha(span) for span in self.ema_spans], dtype=self.ema_dtype)  # Shape: (num_spans,)
-        self.alphas = self.alphas[np.newaxis, :]
-        
-        # Initialize EMA values
-        prev_ema_shape = (self.num_exg_channels, len(self.ema_spans))
-        self.prev_ema_values = np.zeros(prev_ema_shape, dtype=ema_dtype)
-        
-        self.ema_buffer_start = len(self.ema_spans) - 1 # Start saving data after the first EMA span
-        
-        # Channel -> Span
-        self.ema_span_names = [f"ch_{i+1}_ema_{span}" for i in range(self.num_exg_channels) for span in self.ema_spans]
-        self.exg_span_names = []
-        
-        for i in range(self.num_exg_channels):
-            self.exg_span_names.append(f"ch_{i+1}_raw")
-            for span in self.ema_spans:
-                self.exg_span_names.append(f"ch_{i+1}_ema_{span}")
-
-        print(f'EMG Span channel names: {self.exg_span_names}')
-        print(f'Angle channel names: {self.mp_channel_names}')
+            # Buffer
+            status_dtype = np.float32
+            init_capacity_status = int(init_capacity_s * self.status_rate)
+            status_shape = (self.num_status_channels,)
+            
+            self.status_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=status_shape, dtype=status_dtype)
+            self.status_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=timestamp_shape, dtype=timestamp_dtype)
         
     def _get_angle_channel_names(self, angle_info):
         """
@@ -295,6 +299,22 @@ class EMARecorder:
             print(f"Retrieved status channel names: {channel_names}")
 
         return channel_names
+    
+    @property
+    def has_exg(self):
+        return self.save_exg or self.save_merged
+    
+    @property
+    def has_angle(self):
+        return self.save_angle or self.save_merged
+    
+    @property
+    def has_status(self):
+        return self.save_status
+    
+    @property
+    def has_merged(self):
+        return self.save_merged
 
     @property
     def ema_dtype(self):
@@ -322,7 +342,7 @@ class EMARecorder:
     def update(self):
         # Pull data from EMG and Angle streams
 
-        if self.save_exg or self.save_merged:
+        if self.has_exg:
             exg_data, ema_timestamps = self.exg_inlet.pull_chunk(timeout=0.0)
             # exg_data shape: (N, num_exg_channels)
             if len(exg_data) > 0:
@@ -347,7 +367,7 @@ class EMARecorder:
                 self.ema_buffer.extend(new_ema_samples)
                 self.ema_timestamp_buffer.extend(np.array(ema_timestamps, dtype=self.timestamp_dtype))
 
-        if self.save_angle or self.save_merged:
+        if self.has_angle:
             angle_data, angle_timestamps = self.angle_inlet.pull_chunk(timeout=0.0)
             if len(angle_data) > 0:
                 angle_data = np.array(angle_data, dtype=self.mp_dtype)
@@ -355,7 +375,7 @@ class EMARecorder:
                 self.angle_buffer.extend(angle_data)
                 self.angle_timestamp_buffer.extend(np.array(angle_timestamps, dtype=self.timestamp_dtype))
             
-        if self.save_status or self.save_merged:
+        if self.has_status:
             status_data, status_timestamps = self.status_inlet.pull_chunk(timeout=0.0)
             if len(status_data) > 0:
                 status_data = np.array(status_data, dtype=self.mp_dtype)
@@ -390,27 +410,9 @@ class EMARecorder:
         start_time = -1
         end_time = pylsl.local_clock()
         
-        angle_df = None
-        if self.angle_buffer.size > 0:
-            # Get Angle data
-            angle_timestamps = self.angle_timestamp_buffer.get_all()  # shape: (M,)
-            angle_samples = self.angle_buffer.get_all()  # shape: (M, num_angle_channels)
-            # Match the length of timestamps and samples
-            min_len = min(angle_timestamps.shape[0], angle_samples.shape[0])
-            angle_timestamps = angle_timestamps[:min_len]
-            angle_samples = angle_samples[:min_len]
-            # Create DataFrame
-            angle_df = pd.DataFrame(angle_samples, index=angle_timestamps, columns=self.mp_channel_names)
-            # Update start and end times
-            self.start_time = min(self.start_time, angle_timestamps[0])
-            start_time = max(start_time, angle_timestamps[0])
-            end_time = min(end_time, angle_timestamps[-1])
-            # Set to None if empty
-            if angle_df.empty:
-                angle_df = None
-        
+        # Get EXG Data
         ema_df = None
-        if self.ema_buffer.size > 0:
+        if self.has_exg and self.ema_buffer.size > 0:
             # Get EMA data
             ema_timestamps = self.ema_timestamp_buffer.get_all()[self.ema_buffer_start:]  # shape: (N,)
             ema_samples = self.ema_buffer.get_all()[self.ema_buffer_start:]  # shape: (N, len(ema_spans), num_exg_channels)
@@ -425,15 +427,34 @@ class EMARecorder:
             # Create DataFrame
             ema_df = pd.DataFrame(ema_samples, index=ema_timestamps, columns=self.exg_span_names)
             # Update start and end times
-            self.start_time = min(self.start_time, ema_timestamps[0])
+            self.subtract_time = min(self.subtract_time, ema_timestamps[0])
             start_time = max(start_time, ema_timestamps[0])
             end_time = min(end_time, ema_timestamps[-1])
             # Set to None if empty
             if ema_df.empty:
                 ema_df = None
+                
+        angle_df = None
+        if self.has_angle and self.angle_buffer.size > 0:
+            # Get Angle data
+            angle_timestamps = self.angle_timestamp_buffer.get_all()  # shape: (M,)
+            angle_samples = self.angle_buffer.get_all()  # shape: (M, num_angle_channels)
+            # Match the length of timestamps and samples
+            min_len = min(angle_timestamps.shape[0], angle_samples.shape[0])
+            angle_timestamps = angle_timestamps[:min_len]
+            angle_samples = angle_samples[:min_len]
+            # Create DataFrame
+            angle_df = pd.DataFrame(angle_samples, index=angle_timestamps, columns=self.angle_channel_names)
+            # Update start and end times
+            self.subtract_time = min(self.subtract_time, angle_timestamps[0])
+            start_time = max(start_time, angle_timestamps[0])
+            end_time = min(end_time, angle_timestamps[-1])
+            # Set to None if empty
+            if angle_df.empty:
+                angle_df = None
         
         status_df = None
-        if self.status_buffer.size > 0:
+        if self.has_status and self.status_buffer.size > 0:
             # Get Status data
             status_timestamps = self.status_timestamp_buffer.get_all()
             status_samples = self.status_buffer.get_all()
@@ -444,15 +465,15 @@ class EMARecorder:
             # Create DataFrame
             status_df = pd.DataFrame(status_samples, index=status_timestamps, columns=self.status_channel_names)
             # Update start and end times
-            self.start_time = min(self.start_time, status_timestamps[0])
+            self.subtract_time = min(self.subtract_time, status_timestamps[0])
             # Set to None if empty
             if status_df.empty:
                 status_df = None
                 
-        if self.start_time == float('inf'):
-            self.start_time = 0
+        if self.subtract_time == float('inf'):
+            self.subtract_time = 0
         
-        subtract_time = pd.to_timedelta(self.start_time, unit='s')
+        subtract_time = pd.to_timedelta(self.subtract_time, unit='s')
         start_time = pd.to_timedelta(start_time, unit='s')
         end_time = pd.to_timedelta(end_time, unit='s')
         ema_df_masked = None    
