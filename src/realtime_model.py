@@ -4,6 +4,7 @@ import time
 import threading
 from record_ema import EMARecorder, NumpyBuffer
 from tensorflow.keras.models import load_model
+import pylsl
 
 class RealTimePredictor:
     def __init__(self,
@@ -22,9 +23,14 @@ class RealTimePredictor:
         self.std = np.load(model_dir + "/std.npy")
         self.ema_columns = np.load(model_dir + "/ema_columns.npy")
         self.finger_columns = np.load(model_dir + "/finger_columns.npy")
+        self.num_fingers = len(self.finger_columns)
         self.finger_thresholds = np.load(model_dir + "/finger_thresholds.npy")
         self.average_output = np.ones(len(self.finger_columns)) * 0.5
         self.alpha = self.span_to_alpha(average_output_span)
+        
+        # Start the lsl stream
+        self.info = pylsl.StreamInfo('FingerPredictions', 'Markers', self.num_fingers, pylsl.IRREGULAR_RATE, 'float32', 'FingerPredictions')
+        self.outlet = pylsl.StreamOutlet(self.info)
         
     def span_to_alpha(self, span):
         return 2 / (span + 1)
@@ -66,9 +72,12 @@ class RealTimePredictor:
         prediction = self.model.predict(ema_data, verbose=0)
         # ema predictions
         for sample in prediction:
-            self.average_output = self.alpha * self.average_output + (1-self.alpha) * sample
+            self.average_output = self.alpha * sample + (1-self.alpha) * self.average_output
         
         binary_prediction = (self.average_output > 0.5).astype(int)
+        
+        # Stream the predictions
+        self.outlet.push_sample(binary_prediction)
         # Handle the prediction (e.g., print, send over network)
         print(f'Fingers: {self.finger_columns}')
         print(f"Predictions: {binary_prediction}")
