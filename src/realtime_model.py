@@ -9,6 +9,7 @@ class RealTimePredictor:
     def __init__(self,
                  recorder: EMARecorder,
                  model_dir: str,
+                 average_output_span: int = 10
                  ):
         """
         Initializes the real-time predictor.
@@ -22,6 +23,11 @@ class RealTimePredictor:
         self.ema_columns = np.load(model_dir + "/ema_columns.npy")
         self.finger_columns = np.load(model_dir + "/finger_columns.npy")
         self.finger_thresholds = np.load(model_dir + "/finger_thresholds.npy")
+        self.average_output = np.ones(len(self.finger_columns)) * 0.5
+        self.alpha = self.span_to_alpha(average_output_span)
+        
+    def span_to_alpha(self, span):
+        return 2 / (span + 1)
 
     def preprocess_ema(self, data: np.ndarray) -> np.ndarray:
         """
@@ -48,24 +54,24 @@ class RealTimePredictor:
         """
         Continuously checks the buffer for new data and makes predictions.
         """
-        data = self.recorder.get_data()
+        data = self.recorder.get_data()[0]
+        
         if data is None:
             return None
         
         # Get the last row of data
         ema_data = data[self.ema_columns]
         ema_data = self.preprocess_ema(ema_data).values
-        finger_data = data[self.finger_columns]
-        finger_data = self.preprocess_fingers(finger_data, self.finger_columns, self.finger_thresholds).values
-        prediction = self.model.predict(ema_data[-1].reshape(1, -1), verbose=0)
-        binary_prediction = (prediction > 0.5).astype(int)
+        
+        prediction = self.model.predict(ema_data, verbose=0)
+        # ema predictions
+        for sample in prediction:
+            self.average_output = self.alpha * self.average_output + (1-self.alpha) * sample
+        
+        binary_prediction = (self.average_output > 0.5).astype(int)
         # Handle the prediction (e.g., print, send over network)
         print(f'Fingers: {self.finger_columns}')
-        print(f"Predictions: {binary_prediction[-1]}")
-        
-        # # Train the model
-        # if np.any(binary_prediction):
-        #     self.model.fit(ema_data, finger_data, verbose=0)
+        print(f"Predictions: {binary_prediction}")
 
     def run_loop(self):
         """
@@ -85,17 +91,21 @@ def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        csv_filename="data/realtime_ema_data",
-        ema_spans=[1, 2, 4, 8, 16, 32, 64]
+        ema_spans=[1, 2, 4, 8, 16, 32, 64, 128],
+        save_angle=False,
+        save_merged=False,
+        save_status=False,
+        save_exg=True
     )
 
     # Path to the trained model
-    model_dir = "models/s_4/model_0"
+    model_dir = "data/s_0/models/model_0"
 
     # Initialize RealTimePredictor
     predictor = RealTimePredictor(
         recorder=recorder,
-        model_dir=model_dir
+        model_dir=model_dir,
+        average_output_span=50
     )
 
     # Run the real-time predictor

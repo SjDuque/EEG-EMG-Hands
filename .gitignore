@@ -9,4 +9,3 @@ camera_frames/
 arduino/
 swift/
 *.joblib
-*.keras

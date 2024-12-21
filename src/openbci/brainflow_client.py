@@ -4,7 +4,7 @@ import sys
 import logging
 import numpy as np
 from PyQt5 import QtCore
-from pylsl import StreamInlet, resolve_stream, proc_ALL
+from pylsl import StreamInlet, resolve_byprop, proc_ALL
 
 from graph import BaseGraph
 
@@ -67,7 +67,7 @@ class LSLGraphPlotter(BaseGraph):
         Resolves an LSL stream by name and type.
         """
         logging.info(f"Resolving {type_} stream with name '{name}'...")
-        streams = resolve_stream('name', name)
+        streams = resolve_byprop('name', name)
         if not streams:
             logging.error(f"No stream found with name '{name}' and type '{type_}'. Exiting.")
             sys.exit(1)

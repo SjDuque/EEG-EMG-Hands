@@ -405,7 +405,7 @@ class EMARecorder:
     def get_data(self):
         """
         Synchronizes the buffered data and returns as DataFrames,
-        Returns: Tuple of DataFrames (ema_df, angle_df, merged_df)
+        Returns: Tuple of DataFrames (ema_df, angle_df, status_df, merged_df)
         """
         start_time = -1
         end_time = pylsl.local_clock()
@@ -561,9 +561,8 @@ def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        csv_dir="data/s_4",
-        ema_spans=[1, 2, 4, 8, 16, 32, 64],
-        
+        csv_dir="data/s_0",
+        ema_spans=[1, 2, 4, 8, 16, 32, 64, 128],
     )
     recorder.collect_and_save_loop()
 
