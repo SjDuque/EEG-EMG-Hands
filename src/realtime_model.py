@@ -1,7 +1,6 @@
 # realtime_prediction.py
 import numpy as np
 import time
-import threading
 from record_ema import EMARecorder, NumpyBuffer
 from tensorflow.keras.models import load_model
 import pylsl
@@ -10,7 +9,7 @@ class RealTimePredictor:
     def __init__(self,
                  recorder: EMARecorder,
                  model_dir: str,
-                 average_output_span: int = 10
+                 fps: int = 30,
                  ):
         """
         Initializes the real-time predictor.
@@ -21,16 +20,18 @@ class RealTimePredictor:
         self.recorder = recorder
         self.model = load_model(model_dir + "/model.keras")
         self.std = np.load(model_dir + "/std.npy")
+        self.ema_spans = np.load(model_dir + "/ema_spans.npy")
         self.ema_columns = np.load(model_dir + "/ema_columns.npy")
         self.finger_columns = np.load(model_dir + "/finger_columns.npy")
-        self.num_fingers = len(self.finger_columns)
+        self.num_fingers = 5
         self.finger_thresholds = np.load(model_dir + "/finger_thresholds.npy")
-        self.average_output = np.ones(len(self.finger_columns)) * 0.5
-        self.alpha = self.span_to_alpha(average_output_span)
         
         # Start the lsl stream
         self.info = pylsl.StreamInfo('FingerPredictions', 'Markers', self.num_fingers, pylsl.IRREGULAR_RATE, 'float32', 'FingerPredictions')
         self.outlet = pylsl.StreamOutlet(self.info)
+        
+        self.fps = fps
+        self.update_interval = 1 / fps
         
     def span_to_alpha(self, span):
         return 2 / (span + 1)
@@ -71,10 +72,14 @@ class RealTimePredictor:
         
         prediction = self.model.predict(ema_data, verbose=0)
         # ema predictions
-        for sample in prediction:
-            self.average_output = self.alpha * sample + (1-self.alpha) * self.average_output
         
-        binary_prediction = (self.average_output > 0.5).astype(int)
+        # Mean of the output
+        average_output = np.mean(prediction, axis=0)
+        if len(average_output) == 4:
+            # Add the last finger twice
+            average_output = np.append(average_output, average_output[-1])
+        
+        binary_prediction = (average_output > 0.5).astype(int)
         
         # Stream the predictions
         self.outlet.push_sample(binary_prediction)
@@ -86,35 +91,40 @@ class RealTimePredictor:
         """
         Starts data collection and prediction.
         """
+        last_time = time.perf_counter()
         while True:
             # Start data collection
             self.recorder.update()
             # Start prediction loop
             self.predict()
-            
             print('...')
-            time.sleep(0.1)
+            # Sleep to maintain the desired FPS
+            current_time = time.perf_counter()
+            elapsed_time = current_time - last_time
+            sleep_time = self.update_interval - elapsed_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
 def main():
+    # Path to the trained model
+    model_dir = "data/s_0/models/model_0"
+    ema_spans = np.load(model_dir + "/ema_spans.npy")
     # Initialize EMARecorder
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
         angle_stream_name="FingerPercentages",
-        ema_spans=[1, 2, 4, 8, 16, 32, 64, 128],
+        ema_spans=list(ema_spans),
         save_angle=False,
         save_merged=False,
         save_status=False,
         save_exg=True
     )
 
-    # Path to the trained model
-    model_dir = "data/s_0/models/model_0"
-
     # Initialize RealTimePredictor
     predictor = RealTimePredictor(
         recorder=recorder,
         model_dir=model_dir,
-        average_output_span=50
+        fps=5
     )
 
     # Run the real-time predictor
