@@ -468,7 +468,7 @@ def main():
     BoardShim.enable_dev_board_logger()
 
     serial_port = find_serial_port()
-    board_id = BoardIds.SYNTHETIC_BOARD  # Change as needed, e.g., BoardIds.OPENBCI
+    board_id = BoardIds.CYTON_BOARD  # Change as needed, e.g., BoardIds.CYTON_BOARD
 
     # Initialize the BrainFlow server
     server = BrainFlowServer(

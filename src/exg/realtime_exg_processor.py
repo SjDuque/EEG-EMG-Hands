@@ -1,6 +1,21 @@
 import numpy as np
 from scipy.signal import butter, lfilter, lfilter_zi
 
+## TODO:
+# 0. Integrate filter design into the RealtimeEXGProcessor class.
+# 1. Bandpass filter design 
+# 2. Notch filter (or bandstop filter) design
+# 3. SOS filter design
+# 4. Simplify the attributes and methods of the RealtimeEXGProcessor class. e.g., remove self.sums and self.squared_sums.
+# 5. Add a method to reset the processor.
+# 6. Add a method to compute the metrics for a single window size.
+# 7. Add a method to compute the metrics for a single point of data.
+# 8. Dimensionality of the result: (num_samples, num_windows, num_channels).
+# 9. Take into account when the total number of samples is less than the window size. (Or just set default values to 0)
+# 10. Also add filtered data to the results. (bandpass and notch)
+# 11. Simplify index management.
+# 12. Modularize the code so there is no unnecessary overhead (for example, only needing bandpass filter).  
+
 # Define helper functions for filter design and real-time IIR filtering
 def design_bandpass_filter(low_cut, high_cut, fs, order=4):
     """
@@ -60,19 +75,20 @@ class RealtimeEXGProcessor:
             high_pass_cutoff (float, optional): High-pass filter cutoff frequency in Hz.
             filter_order (int, optional): Filter order (default: 4).
         """
-        window_sizes = [int(interval * fs) for interval in window_intervals]  # Corrected window size calculation
+        window_sizes = [int(interval * fs) for interval in window_intervals]  # Convert seconds to number of samples
         
         self.window_sizes = sorted(window_sizes)
         self.num_channels = num_channels
+        self.num_windows = len(self.window_sizes)
         self.max_window_size = self.window_sizes[-1]
+        
+        # Initialize rolling sums and squared sums for each window size
+        self.sums = {w: np.zeros((num_channels,)) for w in self.window_sizes}
+        self.squared_sums = {w: np.zeros((num_channels,)) for w in self.window_sizes}
 
         # Initialize rolling buffers
         self.prev_vals = np.zeros((num_channels, self.max_window_size))
         self.indices = np.zeros(num_channels, dtype=int)  # Current index for each channel
-
-        # Initialize rolling sums and squared sums for each window size
-        self.sums = {w: np.zeros(num_channels) for w in window_sizes}
-        self.squared_sums = {w: np.zeros(num_channels) for w in window_sizes}
 
         # Design bandpass filter if both low and high cutoffs are provided
         self.b = None
@@ -149,21 +165,26 @@ class RealtimeEXGProcessor:
             for w in self.window_sizes:
                 self.sums[w] += batch - oldest_vals
                 self.squared_sums[w] += batch**2 - oldest_vals**2
+                
+                mean = self.sums[w] / w
+                mean_square = self.squared_sums[w] / w
+                
+                # Consider dividing by the window size to compute the mean and variance
 
                 if "mean" in self.methods:
-                    # Average the sum over the window size
-                    results["mean"][w][:, b] = self.sums[w] / w
+                    # Compute the mean value in the current window
+                    results["mean"][w][:, b] = mean
 
                 if "mean_squared" in self.methods:
-                    # Average the squared sum over the window size
-                    results["mean_squared"][w][:, b] = self.squared_sums[w] / w
+                    # Compute the mean squared value in the current window
+                    results["mean_squared"][w][:, b] = mean_square
 
                 if "root_mean_squared" in self.methods:
-                    results["root_mean_squared"][w][:, b] = np.sqrt(self.squared_sums[w] / w)
+                    # Compute the root mean squared value in the current window
+                    results["root_mean_squared"][w][:, b] = np.sqrt(mean_square)
 
                 if "variance" in self.methods:
-                    mean = self.sums[w] / w
-                    mean_square = self.squared_sums[w] / w
+                    # Compute the variance in the current window
                     results["variance"][w][:, b] = mean_square - mean**2
 
                 if "peak" in self.methods:
