@@ -25,6 +25,7 @@ class RealTimePredictor:
         self.finger_columns = np.load(model_dir + "/finger_columns.npy")
         self.num_fingers = 5
         self.finger_thresholds = np.load(model_dir + "/finger_thresholds.npy")
+        self.prev_average_output = np.zeros(self.num_fingers)
         
         # Start the lsl stream
         self.info = pylsl.StreamInfo('FingerPredictions', 'Markers', self.num_fingers, pylsl.IRREGULAR_RATE, 'float32', 'FingerPredictions')
@@ -79,7 +80,10 @@ class RealTimePredictor:
             # Add the last finger twice
             average_output = np.append(average_output, average_output[-1])
         
-        binary_prediction = (average_output > 0.5).astype(int)
+        average_output = (average_output + self.prev_average_output) / 2
+        self.prev_average_output = average_output
+        
+        binary_prediction = average_output.round().astype(int)
         
         # Stream the predictions
         self.outlet.push_sample(binary_prediction)
@@ -124,7 +128,7 @@ def main():
     predictor = RealTimePredictor(
         recorder=recorder,
         model_dir=model_dir,
-        fps=5
+        fps=3
     )
 
     # Run the real-time predictor
