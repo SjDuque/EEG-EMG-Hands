@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from scipy.signal import lfilter
 
 class EMA:
     """
@@ -28,8 +29,7 @@ class EMA:
         elif window_sizes is not None:
             self.window_sizes = sorted(window_sizes)
             
-        self.alphas = np.array([self._span_to_alpha(window_size) for window_size in self.window_sizes]).reshape(-1, 1)
-        self.one_minus_alphas = 1 - self.alphas
+        self.alphas = [self._window_to_alpha(window_size, fs) for window_size in self.window_sizes]
         
         # Initialize processing methods
         self.methods = set(methods)
@@ -48,17 +48,17 @@ class EMA:
             self.methods.add("mean")
 
         # Initialize attributes
-        self.num_channels    = num_channels
-        self.num_windows     = len(self.window_sizes)
+        self.num_channels = num_channels
+        self.num_windows  = len(self.window_sizes)
 
         # Initialize ema
         if "mean" in self.methods:
-            self.ema        = np.zeros((self.num_windows, num_channels), dtype=np.float64)
+            self.zf_mean        = np.zeros((self.num_windows, 1, num_channels), dtype=np.float64)
         if "mean_square" in self.methods:
-            self.ema_square = np.zeros((self.num_windows, num_channels), dtype=np.float64)
+            self.zf_mean_square = np.zeros((self.num_windows, 1, num_channels), dtype=np.float64)
     
     @staticmethod
-    def _span_to_alpha(window_size:int) -> float:
+    def _window_to_alpha(window_size:int, fs:float) -> float:
         """
         Convert a window size to the smoothing factor alpha.
 
@@ -72,64 +72,105 @@ class EMA:
             raise ValueError("Window size must be greater than 0.")
         return 2 / (window_size + 1)
 
-    def process(self, new_vals:np.ndarray | list[list[float]]) -> dict[str, dict[int, np.ndarray]]:
+    def process(self, new_vals: np.ndarray) -> dict[str, np.ndarray]:
         """
-        Update the rolling processor with new values for all channels and compute selected methods.
-
-        Args:
-            new_vals (ndarray): New signal values for all channels. Shape: (num_samples, num_channels).
+        Vectorized processing of new values for all channels.
+        new_vals shape: (num_samples, num_channels)
 
         Returns:
-            dict: Metrics for each method
-                  Each metric is a NumPy array of shape (num_windows, num_samples, num_channels).
+            dict: Dict of metric -> ndarray of shape (num_windows, num_samples, num_channels)
         """
-        # Rectify the signal
+        # Rectify
         new_vals = np.abs(new_vals)
-
-        # Get the number of samples
         num_samples, num_channels = new_vals.shape
+        
         if num_channels != self.num_channels:
-            raise ValueError(f"Number of channels ({num_channels}) does not match the expected value ({self.num_channels}).")
+            raise ValueError(
+                f"Number of channels ({num_channels}) does not match expected ({self.num_channels})."
+            )
 
-        # Initialize results for each method in self.methods and window size
+        # Prepare outputs
         results = {
             method: np.zeros((self.num_windows, num_samples, num_channels), dtype=np.float64)
             for method in self.methods
         }
-        has_mean = "mean" in self.methods
-        has_mean_square = "mean_square" in self.methods
-        
-        for s in range(num_samples):
-            new_sample = new_vals[s]
-            # Update the exponential moving average
 
-            if has_mean:
-                # Compute the mean value in the current window
-                self.ema *= self.one_minus_alphas
-                self.ema += new_sample * self.alphas
-                results["mean"][:, s, :] = self.ema
+        # Precompute squares
+        if "mean_square" in self.methods:
+            new_vals_sq = new_vals * new_vals
 
-            if has_mean_square:
-                # Compute the mean squared value in the current window
-                self.ema_square *= self.one_minus_alphas
-                self.ema_square += (new_sample * new_sample) * self.alphas
-                results["mean_square"][:, s, :] = self.ema_square
-
-        if "root_mean_square" in self.methods:
-            # Compute the root mean squared value in the current window
-            results["root_mean_square"][:] = np.sqrt(results['mean_square'])
-
-        if "variance" in self.methods:
-            # Compute the variance in the current window
-            variance = results["mean_square"] - results["mean"]**2
-            variance = np.clip(variance, 0, None)
-            results["variance"][:] = variance
-
-        if "standard_deviation" in self.methods:
-            # Compute the standard deviation in the current window
-            results["standard_deviation"][:] = np.sqrt(results["variance"])
+        for w in range(self.num_windows):
+            alpha = self.alphas[w]
             
+            # Filter coefficients for an EMA
+            # y[n] = alpha*x[n] + (1-alpha)*y[n-1]
+            b = [alpha]     
+            a = [1, alpha - 1]
+
+            # ---------------
+            # 1) Mean 
+            # ---------------
+            if "mean" in self.methods:
+                # run lfilter for mean, passing in the saved state
+                y_mean, zf_m = lfilter(
+                    b, a, new_vals, axis=0, zi=self.zf_mean[w]
+                )
+                # shape of y_mean => (num_samples, num_channels)
+                results["mean"][w] = y_mean
+                # store updated final state
+                self.zf_mean[w] = zf_m
+
+            # ---------------
+            # 2) Mean square
+            # ---------------
+            if "mean_square" in self.methods:
+                y_msq, zf_msq = lfilter(
+                    b, a, new_vals_sq, axis=0, zi=self.zf_mean_square[w]
+                )
+                results["mean_square"][w] = y_msq
+                self.zf_mean_square[w] = zf_msq
+
+            # ---------------
+            # 3) Derived metrics: RMS, variance, std
+            #    We can compute them from y_mean and y_msq
+            #    If for some reason "mean" or "mean_square"
+            #    wasn't in self.methods, you can do a second 
+            #    call to lfilter. But typically we store them above.
+            # ---------------
+            if "variance" in self.methods or "standard_deviation" in self.methods or "root_mean_square" in self.methods:
+                # Safely reference them:
+                if "mean" in self.methods:
+                    y_mean_ema = results["mean"][w]
+                else:
+                    # if "mean" was omitted, you'd do another lfilter call 
+                    # or handle differently
+                    y_mean_ema, _ = lfilter(b, a, new_vals, axis=0, zi=self.zf_mean[w])
+
+                if "mean_square" in self.methods:
+                    y_msq_ema = results["mean_square"][w]
+                else:
+                    y_msq_ema, _ = lfilter(b, a, new_vals_sq, axis=0, zi=self.zf_mean_square[w])
+
+                # Variance = E[X^2] - (E[X])^2
+                variance = y_msq_ema - (y_mean_ema ** 2)
+                variance = np.clip(variance, 0.0, None)
+
+                if "variance" in self.methods:
+                    results["variance"][w] = variance
+
+                if "standard_deviation" in self.methods:
+                    results["standard_deviation"][w] = np.sqrt(variance)
+
+                if "root_mean_square" in self.methods:
+                    results["root_mean_square"][w] = np.sqrt(y_msq_ema)
+
         return results
+
+    def reset(self):
+        """ Reset the filter states to 0. """
+        self.zf_mean.fill(0.0)
+        self.zf_mean_square.fill(0.0)
+        print("Processor state reset.")
     
     def results_to_df(self, results: dict[str, dict[int, np.ndarray]]) -> pd.DataFrame:
         """
@@ -173,10 +214,10 @@ def main():
 
     # Initialize the rolling processor
     processor = EMA(
-        num_channels=num_channels,
-        fs=fs,
         methods=methods,
-        window_intervals=window_intervals
+        window_intervals=window_intervals,
+        num_channels=num_channels,
+        fs=fs
     )
     
     # Generate random data

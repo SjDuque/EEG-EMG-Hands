@@ -95,6 +95,8 @@ class SMA:
             method: np.zeros((self.num_windows, num_samples, num_channels), dtype=np.float64)
             for method in self.methods
         }
+        has_mean = "mean" in self.methods
+        has_mean_square = "mean_square" in self.methods
         for s in range(num_samples):
             new_sample = new_vals[s]
             # Update rolling sums and squared sums
@@ -102,40 +104,39 @@ class SMA:
                 window_size = self.window_sizes[w]
                 old_sample = self.prev_vals[self.idx - window_size]
                 
-                mean = None
-                mean_square = None
-                variance = None
-
-                if "mean" in self.methods:
+                if has_mean:
                     # Compute the mean value in the current window
                     self.sum[w] += new_sample - old_sample
                     self.sum[w] = np.clip(self.sum[w], 0, None)
-                    mean = self.sum[w] / window_size
-                    results["mean"][w, s, :] = mean
+                    
+                    results["mean"][w, s, :] = self.sum[w] / window_size
 
-                if "mean_square" in self.methods:
+                if has_mean_square:
                     # Compute the mean squared value in the current window
                     self.sum_square[w] += new_sample**2 - old_sample**2
                     self.sum_square[w] = np.clip(self.sum_square[w], 0, None)
-                    mean_square = self.sum_square[w] / window_size
-                    results["mean_square"][w, s, :] = mean_square
-
-                if "root_mean_square" in self.methods:
-                    # Compute the root mean squared value in the current window
-                    results["root_mean_square"][w, s, :] = np.sqrt(mean_square)
-
-                if "variance" in self.methods:
-                    # Compute the variance in the current window
-                    variance = mean_square - mean**2
-                    variance = np.clip(variance, 0, None)
-                    results["variance"][w, s, :] = variance
-
-                if "standard_deviation" in self.methods:
-                    # Compute the standard deviation in the current window
-                    results["standard_deviation"][w, s, :] = np.sqrt(variance)
-
+                    
+                    results["mean_square"][w, s, :] = self.sum_square[w] / window_size
+                    
             # Update the rolling index for each channel
             self._push_sample(new_sample)
+        
+        # Compute additional metrics
+        if "root_mean_square" in self.methods:
+            # Compute the root mean squared value in the current window
+            results["root_mean_square"][:] = np.sqrt(results["mean_square"])
+
+        if "variance" in self.methods:
+            # Compute the variance in the current window
+            mean = results["mean"]
+            mean_square = results["mean_square"]
+            variance = mean_square - mean**2
+            variance = np.clip(variance, 0, None)
+            results["variance"][:] = variance
+
+        if "standard_deviation" in self.methods:
+            # Compute the standard deviation in the current window
+            results["standard_deviation"][:] = np.sqrt(results["variance"])
             
         return results
     
@@ -183,14 +184,14 @@ def main():
 
     # Initialize the rolling processor
     processor = SMA(
-        methods=methods,
-        window_intervals=window_intervals,
         num_channels=num_channels,
-        fs=fs
+        fs=fs,
+        methods=methods,
+        window_intervals=window_intervals
     )
     
     # Generate random data
-    num_samples = 1000
+    num_samples = 100000
     data = np.random.randn(num_samples, num_channels)
     # Process the data
     results = processor.process(data)
