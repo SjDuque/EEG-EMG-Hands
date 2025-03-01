@@ -25,10 +25,10 @@ class EMA:
         elif window_intervals_ms is not None and window_sizes is not None:
             raise ValueError("Only one of window_intervals or window_sizes can be provided.")
         elif window_intervals_ms is not None:
-            self.window_sizes = [interval/1000 * fs for interval in window_intervals_ms]
+            window_sizes = [interval/1000 * fs for interval in window_intervals_ms]
 
         # Set window_sizes to be unique and a numpy array
-        self.window_sizes = np.unique(self.window_sizes)
+        self.window_sizes = np.unique(window_sizes)
         
         # Verify all window_sizes are above 0
         if np.any(self.window_sizes <= 0):
@@ -94,7 +94,7 @@ class EMA:
 
         Returns:
             dict: Metrics for each method
-                  Each metric is a NumPy array of shape (num_windows, num_samples, num_channels).
+                  Each metric is a NumPy array of shape (num_samples, num_windows, num_channels).
         """
         # Rectify the signal
         new_vals = np.abs(new_vals)
@@ -156,9 +156,13 @@ class EMA:
         """
         # Prepare a dictionary for DataFrame columns
         data_dict = {}
+        methods = sorted(self.methods)
         
-        for method in self.methods:
+        for method in methods:
             res_array = results[method]  # shape: (num_samples, num_windows, num_channels)
+            
+            if res_array.ndim != 3:
+                raise ValueError(f"Results for method '{method}' must be a 3D array. Got shape: {res_array.shape}")
             
             _, num_windows, num_channels = res_array.shape
             
@@ -174,7 +178,7 @@ class EMA:
                 
                 # Iterate over each channel
                 for c in range(self.num_channels):
-                    col_name = f"ch_{c}_ema_{method}_{interval}ms"
+                    col_name = f"ch_{c+1}_ema_{method}_{interval}ms"
                     # Flatten across `num_samples` for this window+channel
                     data_dict[col_name] = res_array[:, w, c]
         
@@ -209,7 +213,7 @@ def main():
     )
 
     # Generate random data
-    num_samples = 500000
+    num_samples = 100000
     data = np.random.randn(num_samples, num_channels)
     # Process the data
     results = processor.process(data)
