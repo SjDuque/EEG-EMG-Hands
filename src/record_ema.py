@@ -120,8 +120,8 @@ class EMARecorder:
     """
     def __init__(self,
                  exg_stream_name:str ="filtered_exg",
-                 angle_stream_name:str ="FingerPercentages",
-                 status_stream_name:str ="FingerStatus",
+                 finger_stream_name:str ="finger_percentages",
+                 status_stream_name:str ="finger_status",
                  csv_dir:str ="data/session",
                  save_exg:bool =True,
                  save_angle:bool =True,
@@ -135,7 +135,7 @@ class EMARecorder:
         Initializes the recorder.
 
         :param exg_stream_name: Name of the EMG stream.
-        :param angle_stream_name: Name of the Angle stream.
+        :param finger_stream_name: Name of the Angle stream.
         :param csv_dir: Output CSV files directory.
         :param ema_spans: Exponential moving average spans.
         """
@@ -202,11 +202,11 @@ class EMARecorder:
 
         # Angle Stream
         if self.has_angle:
-            self.angle_stream_name = angle_stream_name
+            self.finger_stream_name = finger_stream_name
             print("Resolving angle (MP) stream...")
-            angle_streams = resolve_byprop('name', self.angle_stream_name, timeout=5)
+            angle_streams = resolve_byprop('name', self.finger_stream_name, timeout=5)
             if not angle_streams:
-                raise RuntimeError(f"No angle stream found with name '{self.angle_stream_name}'.")
+                raise RuntimeError(f"No angle stream found with name '{self.finger_stream_name}'.")
             
             self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=1024, processing_flags=proc_flags)
             angle_info = self.angle_inlet.info()
@@ -560,7 +560,7 @@ class EMARecorder:
 def main():
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
-        angle_stream_name="FingerPercentages",
+        finger_stream_name="finger_percentages",
         csv_dir="data/s_0",
         ema_spans=[1, 2, 4, 8, 16, 32, 64, 128],
     )

@@ -116,7 +116,7 @@ def main():
     # Initialize EMARecorder
     recorder = EMARecorder(
         exg_stream_name="filtered_exg",
-        angle_stream_name="FingerPercentages",
+        finger_stream_name="finger_percentages",
         ema_spans=list(ema_spans),
         save_angle=False,
         save_merged=False,

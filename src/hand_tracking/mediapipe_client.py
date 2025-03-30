@@ -15,16 +15,16 @@ def load_finger_thresholds():
 
 def mediapipe_client_lsl():
     # Resolve streams
-    print("Looking for HandLandmarks stream...")
-    streams_landmarks = pylsl.resolve_byprop("name", "HandLandmarks")
+    print("Looking for hand_landmarks stream...")
+    streams_landmarks = pylsl.resolve_byprop("name", "hand_landmarks")
     if not streams_landmarks:
-        print("No HandLandmarks stream found.")
+        print("No hand_landmarks stream found.")
         return
 
-    print("Looking for FingerPercentages stream...")
-    streams_angles = pylsl.resolve_byprop("name", "FingerPercentages")
+    print("Looking for finger_percentages stream...")
+    streams_angles = pylsl.resolve_byprop("name", "finger_percentages")
     if not streams_angles:
-        print("No FingerPercentages stream found.")
+        print("No finger_percentages stream found.")
         return
 
     inlet_landmarks = pylsl.StreamInlet(streams_landmarks[0], processing_flags=pylsl.proc_ALL)
