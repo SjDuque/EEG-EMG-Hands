@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Path to the virtual environment's Python
-PYTHON=".conda/bin/python"
+PYTHON=".venv/bin/python"
 
 # Path to the Python scripts (relative to the script location)
 SCRIPT_1="src/realtime_model.py"

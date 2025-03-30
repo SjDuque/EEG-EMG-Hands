@@ -130,7 +130,7 @@ class RawRecorder:
             exg_streams = resolve_byprop('name', self.exg_stream_name, timeout=5)
             if not exg_streams:
                 raise RuntimeError(f"No EXG stream found with name '{self.exg_stream_name}'.")
-            self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=1024, processing_flags=proc_flags)
+            self.exg_inlet = StreamInlet(exg_streams[0], max_buflen=1024, processing_flags=self.proc_flags)
             exg_info = self.exg_inlet.info()
             self.exg_rate = exg_info.nominal_srate()
             if self.exg_rate <= 0:
@@ -154,7 +154,7 @@ class RawRecorder:
             angle_streams = resolve_byprop('name', self.finger_stream_name, timeout=5)
             if not angle_streams:
                 raise RuntimeError(f"No angle stream found with name '{self.finger_stream_name}'.")
-            self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=1024, processing_flags=proc_flags)
+            self.angle_inlet = StreamInlet(angle_streams[0], max_buflen=1024, processing_flags=self.proc_flags)
             angle_info = self.angle_inlet.info()
             self.angle_rate = angle_info.nominal_srate()
             if self.angle_rate <= 0:
@@ -179,7 +179,7 @@ class RawRecorder:
             status_streams = resolve_byprop('name', self.status_stream_name, timeout=5)
             if not status_streams:
                 raise RuntimeError(f"No status stream found with name '{self.status_stream_name}'.")
-            self.status_inlet = StreamInlet(status_streams[0], max_buflen=1024, processing_flags=proc_flags)
+            self.status_inlet = StreamInlet(status_streams[0], max_buflen=1024, processing_flags=self.proc_flags)
             status_info = self.status_inlet.info()
             self.status_rate = status_info.nominal_srate()
             if self.status_rate <= 0:
@@ -422,7 +422,7 @@ def main():
     recorder = RawRecorder(
         exg_stream_name="raw_exg",
         finger_stream_name="finger_percentages",
-        csv_dir="data/s_3"
+        csv_dir="data/sergio_mar_29_2"
     )
     recorder.collect_and_save_loop()
 

@@ -285,7 +285,7 @@ def main():
 
     try:
         serial_port = find_serial_port()
-        board_id = BoardIds.SYNTHETIC_BOARD
+        board_id = BoardIds.CYTON_BOARD
         is_emg = True
 
         brainflow_graph = BrainFlowServer(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
