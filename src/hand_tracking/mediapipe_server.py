@@ -276,8 +276,8 @@ def lsl_mp_stream(stop_event):
     joint_set_list =   [(1, 2, 4), (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20)]
 
     # Create LSL StreamInfo 
-    landmark_info = pylsl.StreamInfo('HandLandmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'HandLandmarks')
-    angle_info = pylsl.StreamInfo('FingerPercentages', 'Markers', len(joint_set_labels), target_mp_fps, 'float32', 'FingerPercentages')
+    landmark_info = pylsl.StreamInfo('hand_landmarks', 'Markers', len(channel_names), target_mp_fps, 'float32', 'hand_landmarks')
+    angle_info = pylsl.StreamInfo('finger_percentages', 'Markers', len(joint_set_labels), target_mp_fps, 'float32', 'finger_percentages')
 
     # Add channel labels to the stream's description
     channels = landmark_info.desc().append_child("channels")
@@ -361,7 +361,7 @@ def lsl_status_stream(stop_event):
     
     # Create LSL StreamInfo for status
     
-    status_info = pylsl.StreamInfo('FingerStatus', 'Markers', len(status_labels), 1/status_switch_interval, 'int8', 'FingerStatus')
+    status_info = pylsl.StreamInfo('finger_status', 'Markers', len(status_labels), 1/status_switch_interval, 'int8', 'finger_status')
 
     # Add channel labels to the stream's description
     channels = status_info.desc().append_child("channels")

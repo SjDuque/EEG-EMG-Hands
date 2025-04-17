@@ -38,4 +38,4 @@ def client_send_serial(lsl_name:str, left_hand:bool=True):
         hand_serial.close()
 
 if __name__ == "__main__":
-    client_send_serial(lsl_name="FingerStatus", left_hand=True)
+    client_send_serial(lsl_name="finger_status", left_hand=True)

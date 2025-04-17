@@ -16,8 +16,8 @@ def load_finger_thresholds():
 
 def mediapipe_client_send_serial():
     # ------------------ Configuration ------------------
-    LSL_HAND_LANDMARKS_NAME = "HandLandmarks"
-    LSL_FINGER_PERCENTAGES_NAME = "FingerPercentages"
+    LSL_HAND_LANDMARKS_NAME = "hand_landmarks"
+    LSL_FINGER_PERCENTAGES_NAME = "finger_percentages"
 
     img_size = 360
     scale = img_size  # to scale x,y from [0,1] to image coordinates
@@ -39,13 +39,13 @@ def mediapipe_client_send_serial():
     ser = HandSerial(serial_port='/dev/cu.usbserial-120', left_hand=True)
 
     # Resolve LSL streams
-    print("Looking for HandLandmarks stream...")
+    print("Looking for hand_landmarks stream...")
     streams_landmarks = pylsl.resolve_byprop("name", LSL_HAND_LANDMARKS_NAME)
     if not streams_landmarks:
         print(f"No {LSL_HAND_LANDMARKS_NAME} stream found.")
         return
 
-    print("Looking for FingerPercentages stream...")
+    print("Looking for finger_percentages stream...")
     streams_percentages = pylsl.resolve_byprop("name", LSL_FINGER_PERCENTAGES_NAME)
     if not streams_percentages:
         print(f"No {LSL_FINGER_PERCENTAGES_NAME} stream found.")

@@ -9,7 +9,7 @@ from pylsl import StreamInlet, resolve_byprop, proc_ALL
 from graph import BaseGraph
 
 class LSLGraphPlotter(BaseGraph):
-    def __init__(self, stream_name="filtered_exg", stream_type="EXG"):
+    def __init__(self, stream_name, stream_type="EXG", fps=50):
         # Initialize logging specific to this module
         self._init_logging()
 
@@ -37,11 +37,11 @@ class LSLGraphPlotter(BaseGraph):
         )
 
         # Initialize buffers
-        self.filtered_buffer = np.zeros((self.num_channels, self.buffer_size))
+        self.exg_buffer = np.zeros((self.num_channels, self.buffer_size))
         self.timestamp_buffer = np.zeros(self.buffer_size)
 
         # Set up a timer to periodically fetch and plot data
-        self.update_speed_ms = 1000 // 50  # 20 ms for ~50 FPS
+        self.update_speed_ms = 1000 // fps  # 20 ms for ~50 FPS
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update)
         self.timer.start(self.update_speed_ms)
@@ -80,21 +80,21 @@ class LSLGraphPlotter(BaseGraph):
         Fetches new data from the LSL streams and updates the plots.
         """
         try:
-            # Fetch filtered data
-            chunk_filtered, timestamp_filtered = self.inlet.pull_chunk(timeout=0.0, max_samples=1024)
-            if chunk_filtered:
-                chunk_filtered = np.array(chunk_filtered).T  # Shape: (channels, samples)
-                num_samples_filtered = chunk_filtered.shape[1]
-                self.filtered_buffer = np.roll(self.filtered_buffer, -num_samples_filtered, axis=1)
-                self.filtered_buffer[:, -num_samples_filtered:] = chunk_filtered
-                self.timestamp_buffer = np.roll(self.timestamp_buffer, -num_samples_filtered)
-                self.timestamp_buffer[-num_samples_filtered:] = timestamp_filtered[:num_samples_filtered]
+            # Fetch exg data
+            chunk_exg, timestamp_exg = self.inlet.pull_chunk(timeout=0.0, max_samples=1024)
+            if chunk_exg:
+                chunk_exg = np.array(chunk_exg).T  # Shape: (channels, samples)
+                num_samples_exg = chunk_exg.shape[1]
+                self.exg_buffer = np.roll(self.exg_buffer, -num_samples_exg, axis=1)
+                self.exg_buffer[:, -num_samples_exg:] = chunk_exg
+                self.timestamp_buffer = np.roll(self.timestamp_buffer, -num_samples_exg)
+                self.timestamp_buffer[-num_samples_exg:] = timestamp_exg[:num_samples_exg]
 
                 # Update plots
                 time_axis = np.linspace(-self.window_size, 0, self.buffer_size)
 
                 for i in range(self.num_channels):
-                    self.curves[i].setData(time_axis, self.filtered_buffer[i])
+                    self.curves[i].setData(time_axis, self.exg_buffer[i])
 
         except Exception as e:
             logging.error(f"Error during update: {e}")
