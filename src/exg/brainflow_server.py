@@ -298,8 +298,8 @@ def main():
     BoardShim.enable_dev_board_logger()
 
     try:
-        serial_port = find_serial_port()
-        board_id = BoardIds.SYNTHETIC_BOARD
+        serial_port = '/dev/cu.usbserial-DP04VY9X'
+        board_id = BoardIds.CYTON_BOARD
         is_emg = True
 
         brainflow_graph = BrainFlowGraph(board_id=board_id, is_emg=is_emg, serial_port=serial_port,

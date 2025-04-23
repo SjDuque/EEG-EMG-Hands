@@ -284,7 +284,7 @@ def main():
     BoardShim.enable_dev_board_logger()
 
     try:
-        serial_port = find_serial_port()
+        serial_port = '/dev/cu.usbserial-DP04VY9X'
         board_id = BoardIds.CYTON_BOARD
         is_emg = True
 

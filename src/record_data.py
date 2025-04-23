@@ -422,7 +422,7 @@ def main():
     recorder = RawRecorder(
         exg_stream_name="raw_exg",
         finger_stream_name="finger_percentages",
-        csv_dir="data/sergio_mar_29_2"
+        csv_dir="data/s_0"
     )
     recorder.collect_and_save_loop()
 

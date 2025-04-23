@@ -11,3 +11,4 @@ pandas
 matplotlib
 pyserial
 mediapipe
+plotly
