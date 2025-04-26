@@ -99,11 +99,11 @@ class RawRecorder:
     def __init__(self,
                  exg_stream_name: str = "raw_exg",
                  finger_stream_name: str = "finger_percentages",
-                 status_stream_name: str = "finger_status",
+                 prompt_stream_name: str = "finger_prompt",
                  csv_dir: str = "data/session",
                  save_exg: bool = True,
                  save_angle: bool = True,
-                 save_status: bool = True,
+                 save_prompt: bool = True,
                  init_capacity_s: float = 1024,
                  update_interval: float = 0.01):
         """
@@ -116,7 +116,7 @@ class RawRecorder:
         self.csv_dir = csv_dir
         self.save_exg = save_exg
         self.save_angle = save_angle
-        self.save_status = save_status
+        self.save_prompt = save_prompt
         self.update_interval = update_interval
         self.subtract_time = float('inf')
         
@@ -172,28 +172,28 @@ class RawRecorder:
             
             print(f'Angle channel names: {self.angle_channel_names}')
         
-        # Status Stream
-        if self.save_status:
-            self.status_stream_name = status_stream_name
-            print("Resolving status stream...")
-            status_streams = resolve_byprop('name', self.status_stream_name, timeout=5)
-            if not status_streams:
-                raise RuntimeError(f"No status stream found with name '{self.status_stream_name}'.")
-            self.status_inlet = StreamInlet(status_streams[0], max_buflen=1024, processing_flags=self.proc_flags)
-            status_info = self.status_inlet.info()
-            self.status_rate = status_info.nominal_srate()
-            if self.status_rate <= 0:
-                raise ValueError("Status stream sampling rate is not set or zero.")
-            self.num_status_channels = status_info.channel_count()
-            if self.num_status_channels <= 0:
-                raise ValueError("Status stream channel_count is not set or zero.")
+        # Prompt Stream
+        if self.save_prompt:
+            self.prompt_stream_name = prompt_stream_name
+            print("Resolving prompt stream...")
+            prompt_streams = resolve_byprop('name', self.prompt_stream_name, timeout=5)
+            if not prompt_streams:
+                raise RuntimeError(f"No prompt stream found with name '{self.prompt_stream_name}'.")
+            self.prompt_inlet = StreamInlet(prompt_streams[0], max_buflen=1024, processing_flags=self.proc_flags)
+            prompt_info = self.prompt_inlet.info()
+            self.prompt_rate = prompt_info.nominal_srate()
+            if self.prompt_rate <= 0:
+                raise ValueError("Prompt stream sampling rate is not set or zero.")
+            self.num_prompt_channels = prompt_info.channel_count()
+            if self.num_prompt_channels <= 0:
+                raise ValueError("Prompt stream channel_count is not set or zero.")
             
-            self.status_channel_names = self._get_status_channel_names(status_info)
-            status_dtype = np.float32
-            init_capacity_status = int(init_capacity_s * self.status_rate)
-            status_shape = (self.num_status_channels,)
-            self.status_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=status_shape, dtype=status_dtype)
-            self.status_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_status, shape=timestamp_shape, dtype=self.timestamp_dtype)
+            self.prompt_channel_names = self._get_prompt_channel_names(prompt_info)
+            prompt_dtype = np.float32
+            init_capacity_prompt = int(init_capacity_s * self.prompt_rate)
+            prompt_shape = (self.num_prompt_channels,)
+            self.prompt_buffer = NumpyBuffer(init_capacity=init_capacity_prompt, shape=prompt_shape, dtype=prompt_dtype)
+            self.prompt_timestamp_buffer = NumpyBuffer(init_capacity=init_capacity_prompt, shape=timestamp_shape, dtype=self.timestamp_dtype)
             
             
     def _connect_lsl_stream(self, stream_name, init_capacity_s):
@@ -245,18 +245,18 @@ class RawRecorder:
             print(f"Retrieved angle channel names: {channel_names}")
         return channel_names
     
-    def _get_status_channel_names(self, status_info):
-        status_desc = status_info.desc()
-        child_element = status_desc.child('channels').child('channel')
+    def _get_prompt_channel_names(self, prompt_info):
+        prompt_desc = prompt_info.desc()
+        child_element = prompt_desc.child('channels').child('channel')
         channel_names = []
         while not child_element.empty():
             channel_names.append(child_element.child_value('label'))
             child_element = child_element.next_sibling()
         if not channel_names:
-            channel_names = [f"status_{i+1}" for i in range(self.num_status_channels)]
-            print("No channel labels found in status stream metadata. Using default channel names.")
+            channel_names = [f"prompt_{i+1}" for i in range(self.num_prompt_channels)]
+            print("No channel labels found in prompt stream metadata. Using default channel names.")
         else:
-            print(f"Retrieved status channel names: {channel_names}")
+            print(f"Retrieved prompt channel names: {channel_names}")
         return channel_names
     
     @property
@@ -276,7 +276,7 @@ class RawRecorder:
         return self.angle_buffer.size / self.angle_rate
 
     def update(self):
-        # Pull data from EXG, Angle, and Status streams
+        # Pull data from EXG, Angle, and Prompt streams
         if self.save_exg:
             exg_data, exg_timestamps = self.exg_inlet.pull_chunk(timeout=0.0)
             if len(exg_data) > 0:
@@ -291,12 +291,12 @@ class RawRecorder:
                 self.angle_buffer.extend(angle_data)
                 self.angle_timestamp_buffer.extend(np.array(angle_timestamps, dtype=self.timestamp_dtype))
             
-        if self.save_status:
-            status_data, status_timestamps = self.status_inlet.pull_chunk(timeout=0.0)
-            if len(status_data) > 0:
-                status_data = np.array(status_data, dtype=self.status_buffer.dtype)
-                self.status_buffer.extend(status_data)
-                self.status_timestamp_buffer.extend(np.array(status_timestamps, dtype=self.timestamp_dtype))
+        if self.save_prompt:
+            prompt_data, prompt_timestamps = self.prompt_inlet.pull_chunk(timeout=0.0)
+            if len(prompt_data) > 0:
+                prompt_data = np.array(prompt_data, dtype=self.prompt_buffer.dtype)
+                self.prompt_buffer.extend(prompt_data)
+                self.prompt_timestamp_buffer.extend(np.array(prompt_timestamps, dtype=self.timestamp_dtype))
 
     def collect_and_save_loop(self):
         print("Starting data collection loop. Press Ctrl+C to stop and save data.")
@@ -340,17 +340,17 @@ class RawRecorder:
             if angle_df.empty:
                 angle_df = None
                 
-        status_df = None
-        if self.save_status and self.status_buffer.size > 0:
-            status_timestamps = self.status_timestamp_buffer.get_all()
-            status_samples = self.status_buffer.get_all()
-            min_len = min(status_timestamps.shape[0], status_samples.shape[0])
-            status_timestamps = status_timestamps[:min_len]
-            status_samples = status_samples[:min_len]
-            status_df = pd.DataFrame(status_samples, index=status_timestamps, columns=self.status_channel_names)
-            self.subtract_time = min(self.subtract_time, status_timestamps[0])
-            if status_df.empty:
-                status_df = None
+        prompt_df = None
+        if self.save_prompt and self.prompt_buffer.size > 0:
+            prompt_timestamps = self.prompt_timestamp_buffer.get_all()
+            prompt_samples = self.prompt_buffer.get_all()
+            min_len = min(prompt_timestamps.shape[0], prompt_samples.shape[0])
+            prompt_timestamps = prompt_timestamps[:min_len]
+            prompt_samples = prompt_samples[:min_len]
+            prompt_df = pd.DataFrame(prompt_samples, index=prompt_timestamps, columns=self.prompt_channel_names)
+            self.subtract_time = min(self.subtract_time, prompt_timestamps[0])
+            if prompt_df.empty:
+                prompt_df = None
                 
         if self.subtract_time == float('inf'):
             self.subtract_time = 0
@@ -371,16 +371,16 @@ class RawRecorder:
             angle_df.index = (angle_df.index.total_seconds() * 1000).round().astype(int)
             angle_df.index.name = 'timestamp'
             
-        if status_df is not None:
-            status_df.index = pd.to_timedelta(status_df.index, unit='s')
-            status_df.index -= subtract_time
-            status_df.index = (status_df.index.total_seconds() * 1000).round().astype(int)
-            status_df.index.name = 'timestamp'
+        if prompt_df is not None:
+            prompt_df.index = pd.to_timedelta(prompt_df.index, unit='s')
+            prompt_df.index -= subtract_time
+            prompt_df.index = (prompt_df.index.total_seconds() * 1000).round().astype(int)
+            prompt_df.index.name = 'timestamp'
         
-        return exg_df, angle_df, status_df
+        return exg_df, angle_df, prompt_df
 
     def save_data(self):
-        exg_df, angle_df, status_df = self.get_data()
+        exg_df, angle_df, prompt_df = self.get_data()
         
         if exg_df is None and angle_df is None:
             print("No data to save.")
@@ -407,13 +407,13 @@ class RawRecorder:
             angle_df.to_csv(angle_filename)
             print(f"Angle Dataframe saved to '{angle_filename}'.")
             
-        if self.save_status and status_df is not None:
-            status_dir = os.path.join(self.csv_dir, "status")
-            if not os.path.exists(status_dir):
-                os.makedirs(status_dir)
-            status_filename = os.path.join(status_dir, f"data_{timestamp}.csv")
-            status_df.to_csv(status_filename)
-            print(f"Status Dataframe saved to '{status_filename}'.")
+        if self.save_prompt and prompt_df is not None:
+            prompt_dir = os.path.join(self.csv_dir, "prompt")
+            if not os.path.exists(prompt_dir):
+                os.makedirs(prompt_dir)
+            prompt_filename = os.path.join(prompt_dir, f"data_{timestamp}.csv")
+            prompt_df.to_csv(prompt_filename)
+            print(f"Prompt Dataframe saved to '{prompt_filename}'.")
         
         print("Data saved successfully.")
 
@@ -421,8 +421,7 @@ class RawRecorder:
 def main():
     recorder = RawRecorder(
         exg_stream_name="raw_exg",
-        finger_stream_name="finger_percentages",
-        csv_dir="data/s_0"
+        csv_dir="data/s_04_24_25"
     )
     recorder.collect_and_save_loop()
 

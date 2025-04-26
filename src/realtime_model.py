@@ -1,13 +1,14 @@
 # realtime_prediction.py
 import numpy as np
 import time
-from record_ema import EMARecorder, NumpyBuffer
+from record_data import RawRecorder, NumpyBuffer
+from exg.ema import EMA
 from tensorflow.keras.models import load_model
 import pylsl
 
 class RealTimePredictor:
     def __init__(self,
-                 recorder: EMARecorder,
+                 recorder: RawRecorder,
                  model_dir: str,
                  fps: int = 30,
                  ):
@@ -20,12 +21,17 @@ class RealTimePredictor:
         self.recorder = recorder
         self.model = load_model(model_dir + "/model.keras")
         self.std = np.load(model_dir + "/std.npy")
-        self.ema_spans = np.load(model_dir + "/ema_spans.npy")
-        self.ema_columns = np.load(model_dir + "/ema_columns.npy")
-        self.finger_columns = np.load(model_dir + "/finger_columns.npy")
+        self.window_sizes = np.load(model_dir + "/window_sizes.npy")
+        self.ema_columns = np.load(model_dir + "/ema_columns.npy", allow_pickle=True)
+        self.finger_columns = np.load(model_dir + "/finger_columns.npy", allow_pickle=True)
         self.num_fingers = 5
-        self.finger_thresholds = np.load(model_dir + "/finger_thresholds.npy")
         self.prev_average_output = np.zeros(self.num_fingers)
+        
+        self.ema_processor = EMA(
+            window_sizes=self.window_sizes,
+            num_channels=8,
+            fs=250
+        )
         
         # Start the lsl stream
         self.info = pylsl.StreamInfo('FingerPredictions', 'Markers', self.num_fingers, pylsl.IRREGULAR_RATE, 'float32', 'FingerPredictions')
@@ -47,16 +53,6 @@ class RealTimePredictor:
         # Normalize using pre-loaded mean and std
         normalized = data / self.std
         return normalized
-    
-    def preprocess_fingers(self, data, finger_columns, finger_thresholds):
-        """Preprocesses the finger angle data by normalizing it."""
-        data = data.copy()
-        for i, finger in enumerate(finger_columns):
-            finger_threshold = finger_thresholds[i]
-            data[finger] = (data[finger] - finger_threshold[0]) / (finger_threshold[1] - finger_threshold[0])
-            data[finger] = data[finger].clip(0, 1)
-            
-        return data
 
     def predict(self):
         """
@@ -66,10 +62,13 @@ class RealTimePredictor:
         
         if data is None:
             return None
-        
+    
         # Get the last row of data
-        ema_data = data[self.ema_columns]
-        ema_data = self.preprocess_ema(ema_data).values
+        ema_data = self.ema_processor.process(data.values)
+        ema_data = self.ema_processor.results_to_df(ema_data)
+        ema_data = ema_data[self.ema_columns].values
+        # Preprocess the data
+        ema_data = self.preprocess_ema(ema_data)
         
         prediction = self.model.predict(ema_data, verbose=0)
         # ema predictions
@@ -111,16 +110,12 @@ class RealTimePredictor:
 
 def main():
     # Path to the trained model
-    model_dir = "data/s_0/models/model_0"
-    ema_spans = np.load(model_dir + "/ema_spans.npy")
+    model_dir = "data/s_04_24_25/models/model_0"
     # Initialize EMARecorder
-    recorder = EMARecorder(
+    recorder = RawRecorder(
         exg_stream_name="filtered_exg",
-        finger_stream_name="finger_percentages",
-        ema_spans=list(ema_spans),
         save_angle=False,
-        save_merged=False,
-        save_status=False,
+        save_prompt=False,
         save_exg=True
     )
 

@@ -72,7 +72,7 @@ class IIR:
         sos = tf2sos(b, a)
         return sos
 
-    def apply_inplace(self, data: np.ndarray) -> np.ndarray:
+    def process_inplace(self, data: np.ndarray) -> np.ndarray:
         """
         Apply combined bandpass and notch filters to multi-channel data in real-time.
 
@@ -87,6 +87,24 @@ class IIR:
             data[:, ch], self.zi[ch] = sosfilt(self.sos_combined, data[:, ch], zi=self.zi[ch])
             
         return data
+    
+    def process(self, data: np.ndarray) -> np.ndarray:
+        """
+        Apply combined bandpass and notch filters to multi-channel data in real-time.
+
+        Args:
+            data (ndarray): New data batch (num_samples, num_channels).
+
+        """
+        num_channels = data.shape[1]
+        
+        filtered_data = np.zeros_like(data)
+        
+        for ch in range(num_channels):
+            # Apply the combined SOS filter to each channel with its own state
+            filtered_data[:, ch], self.zi[ch] = sosfilt(self.sos_combined, data[:, ch], zi=self.zi[ch])
+            
+        return filtered_data
     
     def reset(self):
         self.zi = np.zeros((self.num_channels, self.num_sections, 2))

@@ -136,7 +136,7 @@ class BrainFlowServer:
             fs=self.sampling_rate,
             lowpass_fs=self.sampling_rate / 2,
             highpass_fs=10.0,
-            notch_fs_list=[60],
+            notch_fs_list=[50, 60],
             filter_order=4
         )
 
@@ -224,7 +224,7 @@ class BrainFlowServer:
             # Apply IIR filtering to the new data chunk:
             #   - Transpose data so rows=samples, columns=channels.
             new_chunk = exg_data.T  # shape: (num_samples, num_channels)
-            filtered_chunk = self.iir_filter.apply_inplace(new_chunk)
+            filtered_chunk = self.iir_filter.process_inplace(new_chunk)
             # Store the filtered chunk back in buffer (transpose back to channels x samples)
             self.filtered_exg_buffer = np.roll(self.filtered_exg_buffer, -num_samples, axis=1)
             self.filtered_exg_buffer[:, -num_samples:] = filtered_chunk.T
