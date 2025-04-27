@@ -3,10 +3,12 @@ import pylsl
 import time
 import os
 import csv
+import re
 
 class LSLRecorder:
     """
     Records arbitrary named LSL streams directly to CSV files as data arrives.
+    Each session is saved to a subdirectory 'r_<n>' under the base directory, where n increments from 0.
     """
     def __init__(
         self,
@@ -15,7 +17,7 @@ class LSLRecorder:
         update_interval: float = 0.01,
     ):
         """
-        :param streams: Mapping from key names to LSL stream names. If None, defaults to exg, angle, prompt.
+        :param streams: Mapping from key names to LSL stream names.
         :param csv_dir: Base directory for saving CSVs.
         :param update_interval: Sleep interval between pulls.
         """
@@ -29,8 +31,20 @@ class LSLRecorder:
 
         self.streams = streams
 
-        timestamp = int(time.time())
+        # Ensure base directory exists
         os.makedirs(self.csv_dir, exist_ok=True)
+        # Determine next session index
+        existing = [d for d in os.listdir(self.csv_dir)
+                    if os.path.isdir(os.path.join(self.csv_dir, d))]
+        indices = []
+        for d in existing:
+            m = re.match(r"r_(\d+)$", d)
+            if m:
+                indices.append(int(m.group(1)))
+        next_idx = max(indices) + 1 if indices else 0
+        session_dir = os.path.join(self.csv_dir, f"r_{next_idx}")
+        os.makedirs(session_dir, exist_ok=True)
+
         self._configs = {}
 
         for key, name in self.streams.items():
@@ -44,10 +58,8 @@ class LSLRecorder:
             info = inlet.info()
             nch = info.channel_count()
 
-            # Prepare CSV file and writer
-            subdir = os.path.join(self.csv_dir, key)
-            os.makedirs(subdir, exist_ok=True)
-            fname = os.path.join(subdir, f"data_{timestamp}.csv")
+            # Prepare CSV file and writer in the session directory
+            fname = os.path.join(session_dir, f"{key}.csv")
             f = open(fname, 'w', newline='')
             writer = csv.writer(f)
 
@@ -91,11 +103,9 @@ class LSLRecorder:
 
 
 def main():
-    # By default, includes exg, angle, and prompt; you can supply any mapping
     recorder = LSLRecorder(
         streams={
             'exg': "raw_exg",
-            # 'angle': "finger_percentages",
             'prompt': "finger_prompt"
         },
         csv_dir="data/s_test"

@@ -1,14 +1,13 @@
 # realtime_prediction.py
 import numpy as np
 import time
-from record_data import RawRecorder, NumpyBuffer
 from exg.ema import EMA
 from tensorflow.keras.models import load_model
 import pylsl
 
 class RealTimePredictor:
     def __init__(self,
-                 recorder: RawRecorder,
+                 filtered_exg_stream: str,
                  model_dir: str,
                  fps: int = 30,
                  ):
@@ -18,7 +17,6 @@ class RealTimePredictor:
         :param recorder: Instance of EMARecorder for data collection.
         :param model_path: Path to the trained Keras model.
         """
-        self.recorder = recorder
         self.model = load_model(model_dir + "/model.keras")
         self.std = np.load(model_dir + "/std.npy")
         self.window_sizes = np.load(model_dir + "/window_sizes.npy")
@@ -33,8 +31,17 @@ class RealTimePredictor:
             fs=250
         )
         
+        # Initialize the EXG stream
+        # Resolve and open LSL inlet
+        found = pylsl.resolve_byprop('name', filtered_exg_stream, timeout=5)
+        if not found:
+            raise RuntimeError(f"No LSL stream named '{filtered_exg_stream}' found.")
+        self.exg_inlet = pylsl.StreamInlet(
+            found[0], max_buflen=1024, processing_flags=self._proc_flags
+        )
+        
         # Start the lsl stream
-        self.info = pylsl.StreamInfo('FingerPredictions', 'Markers', self.num_fingers, pylsl.IRREGULAR_RATE, 'float32', 'FingerPredictions')
+        self.info = pylsl.StreamInfo('finger_predictions', 'Markers', self.num_fingers, pylsl.IRREGULAR_RATE, 'float32', 'finger_predictions')
         self.outlet = pylsl.StreamOutlet(self.info)
         
         self.fps = fps
@@ -58,13 +65,13 @@ class RealTimePredictor:
         """
         Continuously checks the buffer for new data and makes predictions.
         """
-        data = self.recorder.get_data()[0]
+        data, _ = self.exg_inlet.pull_chunk(timeout=1.0)
         
         if data is None:
             return None
     
-        # Get the last row of data
-        ema_data = self.ema_processor.process(data.values)
+        # EMA processing
+        ema_data = self.ema_processor.process(data)
         ema_data = self.ema_processor.results_to_df(ema_data)
         ema_data = ema_data[self.ema_columns].values
         # Preprocess the data
@@ -111,17 +118,10 @@ class RealTimePredictor:
 def main():
     # Path to the trained model
     model_dir = "data/s_04_24_25/models/model_0"
-    # Initialize EMARecorder
-    recorder = RawRecorder(
-        exg_stream_name="filtered_exg",
-        save_angle=False,
-        save_prompt=False,
-        save_exg=True
-    )
 
     # Initialize RealTimePredictor
     predictor = RealTimePredictor(
-        recorder=recorder,
+        filtered_exg_stream="filtered_exg",
         model_dir=model_dir,
         fps=3
     )
