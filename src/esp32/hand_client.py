@@ -4,7 +4,7 @@ import time
             
 def client_send_serial(lsl_name:str, left_hand:bool=True):
     # ------------------ Configuration ------------------
-    SERIAL_PORT = '/dev/cu.usbserial-2120'  # Set to None to auto-detect
+    SERIAL_PORT = '/dev/cu.usbserial-1140'  # Set to None to auto-detect
     
     hand_serial = HandSerial(SERIAL_PORT)
 

@@ -27,8 +27,13 @@ class RealTimePredictor:
         
         self.ema_processor = EMA(
             window_sizes=self.window_sizes,
-            num_channels=8,
-            fs=250
+            num_channels=16,
+            fs=125
+        )
+        self._proc_flags = (
+            pylsl.proc_clocksync |
+            pylsl.proc_dejitter |
+            pylsl.proc_monotonize
         )
         
         # Initialize the EXG stream
@@ -103,8 +108,6 @@ class RealTimePredictor:
         """
         last_time = time.perf_counter()
         while True:
-            # Start data collection
-            self.recorder.update()
             # Start prediction loop
             self.predict()
             print('...')
@@ -117,13 +120,13 @@ class RealTimePredictor:
 
 def main():
     # Path to the trained model
-    model_dir = "data/s_04_24_25/models/model_0"
+    model_dir = "data/s_4_26_25/models/model_0"
 
     # Initialize RealTimePredictor
     predictor = RealTimePredictor(
         filtered_exg_stream="filtered_exg",
         model_dir=model_dir,
-        fps=3
+        fps=5
     )
 
     # Run the real-time predictor

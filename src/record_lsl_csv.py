@@ -108,7 +108,7 @@ def main():
             'exg': "raw_exg",
             'prompt': "finger_prompt"
         },
-        csv_dir="data/s_test"
+        csv_dir="data/s_4_26_25"
     )
     recorder.collect_and_close()
 

@@ -285,12 +285,12 @@ def main():
 
     try:
         serial_port = '/dev/cu.usbserial-DP04VY9X'
-        board_id = BoardIds.CYTON_BOARD
+        board_id = BoardIds.CYTON_DAISY_BOARD
         is_emg = True
 
         brainflow_graph = BrainFlowServer(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
                                          lsl_raw=True, lsl_filtered=True,
-                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8])
+                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
         brainflow_graph.run()
     except RuntimeError as e:
         logging.error(f"RuntimeError: {e}")
