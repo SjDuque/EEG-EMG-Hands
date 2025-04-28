@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON=".venv/bin/python"
 
 # Path to the Python scripts (relative to the script location)
-SCRIPT_1="src/realtime_model.py"
+SCRIPT_1="src/hand_prediction_server.py"
 SCRIPT_2="src/esp32/hand_prediction_client.py"
 
 # Open the first script in a new terminal

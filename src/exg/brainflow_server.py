@@ -1,19 +1,13 @@
-# graph_brainflow.py
-
 import logging
 import sys
+import time
 import numpy as np
 import datetime
-from PyQt5 import QtCore
-
-from brainflow import NoiseTypes
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds, BrainFlowError
-from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations
 from pylsl import StreamInfo, StreamOutlet, local_clock
-
-from graph import BaseGraph
-
 import serial.tools.list_ports
+
+from iir import IIR
 
 def find_serial_port():
     """
@@ -28,11 +22,10 @@ def find_serial_port():
     logging.warning("OpenBCI board not found. Using synthetic board instead.")
     return ''
 
-class BrainFlowGraph(BaseGraph):
-    def __init__(self, board_id=BoardIds.SYNTHETIC_BOARD, is_emg=False, 
-                 serial_port='', lsl_raw=False, lsl_filtered=True,
+class BrainFlowServer:
+    def __init__(self, fps=None, board_id=BoardIds.SYNTHETIC_BOARD, is_emg=False, 
+                 serial_port='', lsl_raw=True, lsl_filtered=True,
                  include_channels=None):
-        # Initialize logging specific to this module
         self._init_logging()
 
         self.params = BrainFlowInputParams()
@@ -67,6 +60,12 @@ class BrainFlowGraph(BaseGraph):
             logging.error(f"Failed to retrieve board information: {e}")
             self.release_board()
             sys.exit(1)
+            
+                
+        if fps is None:
+            fps = self.sampling_rate
+        
+        self.fps = fps
 
         # Configure board if EMG is enabled
         if self.is_emg and self.board_id in (BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
@@ -89,7 +88,8 @@ class BrainFlowGraph(BaseGraph):
                     raise ValueError("Invalid value for config settings (All must be a single character).")
 
                 # Set config settings for each channel
-                config_list = [f"x{channel_names[channel-1]}{POWER_DOWN}{GAIN_SET}{INPUT_TYPE_SET}{BIAS_SET}{SRB2_SET}{SRB1_SET}X" for channel in self.exg_channels]
+                config_list = [f"x{channel_names[channel-1]}{POWER_DOWN}{GAIN_SET}{INPUT_TYPE_SET}{BIAS_SET}{SRB2_SET}{SRB1_SET}X" 
+                               for channel in self.exg_channels]
                 config = ''.join(config_list)
                 if config:
                     self.board_shim.config_board(config)
@@ -109,13 +109,8 @@ class BrainFlowGraph(BaseGraph):
             self.release_board()
             sys.exit(1)
 
-        # Initialize the base graph
-        super().__init__(
-            title='BrainFlow Plot',
-            window_size=5,
-            sampling_rate=self.sampling_rate,
-            num_channels=len(self.exg_channels)
-        )
+        # Set the buffer size based on the window length (5 seconds)
+        self.buffer_size = int(self.sampling_rate * 5)
 
         # Initialize LSL streams
         self.lsl_raw = lsl_raw
@@ -127,34 +122,37 @@ class BrainFlowGraph(BaseGraph):
         self.filtered_exg_buffer = np.zeros((len(self.exg_channels), self.buffer_size))
         self.timestamp_buffer = np.zeros(self.buffer_size)
 
-        # Set up a timer to call the update function periodically
-        self.update_speed_ms = 1000 // 50  # 20 ms for ~50 FPS
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update)
-        self.timer.start(self.update_speed_ms)
+        # Compute time difference for LSL timestamps
         self.time_diff = local_clock() - datetime.datetime.now().timestamp()
 
-        logging.info("Entering the Qt event loop.")
-        self.app.exec_()
+        # Initialize the IIR filter:
+        #   - lowpass_fs is set to half the sampling rate (i.e. the upper cutoff)
+        #   - highpass_fs is set to 10.0 Hz (i.e. the lower cutoff)
+        #   - notch_fs_list is set to remove 60 Hz interference.
+        self.iir_filter = IIR(
+            num_channels=len(self.exg_channels),
+            fs=self.sampling_rate,
+            lowpass_fs=self.sampling_rate / 2,
+            highpass_fs=10.0,
+            notch_fs_list=[50, 60],
+            filter_order=4
+        )
 
     def _init_logging(self):
         """
         Configures the logging settings.
         """
         logging.basicConfig(
-            level=logging.DEBUG,  # Set to DEBUG for detailed logs
+            level=logging.DEBUG,
             format='[%(asctime)s] [%(levelname)s] %(message)s',
-            handlers=[
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=[logging.StreamHandler(sys.stdout)]
         )
-        logging.info("Logging initialized for BrainFlowGraph.")
+        logging.info("Logging initialized for BrainFlowServer.")
 
     def _init_lsl_streams(self):
         """
         Initializes LSL streams for raw and filtered data.
         """
-        # Define Raw LSL stream info
         if self.lsl_raw:
             self.raw_lsl_info = StreamInfo(
                 name="raw_exg",
@@ -167,7 +165,6 @@ class BrainFlowGraph(BaseGraph):
             self.raw_lsl_outlet = StreamOutlet(self.raw_lsl_info)
             logging.info("Raw LSL initialized.")
 
-        # Define Filtered LSL stream info
         if self.lsl_filtered:
             self.filtered_lsl_info = StreamInfo(
                 name="filtered_exg",
@@ -188,30 +185,30 @@ class BrainFlowGraph(BaseGraph):
         """
         if num_samples == 0:
             return
-        
+
         raw_data = self.raw_exg_buffer[:, -num_samples:].copy()
         filtered_data = self.filtered_exg_buffer[:, -num_samples:].copy()
         timestamp_data = self.timestamp_buffer[-num_samples:].copy()
-        
+
         if self.lsl_raw:
             self.raw_lsl_outlet.push_chunk(raw_data.T.tolist(), timestamp_data.tolist())
-            
+
         if self.lsl_filtered:
             self.filtered_lsl_outlet.push_chunk(filtered_data.T.tolist(), timestamp_data.tolist())
 
     def update(self):
         """
-        Fetches new data from the board, processes it, updates plots, and streams via LSL.
+        Fetches new data from the board, processes it using the IIR filter, 
+        and streams via LSL.
         """
         try:
-            # Fetch the latest samples
+            # Fetch the latest samples from the board
             new_data = self.board_shim.get_board_data()
             if new_data is None or new_data.size == 0:
                 return
 
-            # Extract EXG channels
             num_samples = new_data.shape[1]
-            exg_data = new_data[self.exg_channels, :]  # shape: (channels, samples)
+            exg_data = new_data[self.exg_channels, :]  # shape: (channels, num_samples)
             timestamp_data = new_data[self.timestamp_channel, :] + self.time_diff
 
             # Update timestamp buffer
@@ -222,39 +219,15 @@ class BrainFlowGraph(BaseGraph):
             self.raw_exg_buffer = np.roll(self.raw_exg_buffer, -num_samples, axis=1)
             self.raw_exg_buffer[:, -num_samples:] = exg_data
 
-            # Roll the filtered data buffer
+            # Apply IIR filtering to the new data chunk:
+            #   - Transpose data so rows=samples, columns=channels.
+            new_chunk = exg_data.T  # shape: (num_samples, num_channels)
+            filtered_chunk = self.iir_filter.process_inplace(new_chunk)
+            # Store the filtered chunk back in buffer (transpose back to channels x samples)
             self.filtered_exg_buffer = np.roll(self.filtered_exg_buffer, -num_samples, axis=1)
-            
-            # Apply filters and update filtered buffer
-            for count, channel_data in enumerate(self.raw_exg_buffer):
-                # Grab the latest data
-                channel_data = channel_data.copy()
+            self.filtered_exg_buffer[:, -num_samples:] = filtered_chunk.T
 
-                # Detrend
-                DataFilter.detrend(channel_data, DetrendOperations.CONSTANT.value)
-
-                # Bandpass filter
-                DataFilter.perform_bandpass(
-                    channel_data, self.sampling_rate, 10.0, self.sampling_rate/2, 4, FilterTypes.BUTTERWORTH.value, 1.0
-                )
-                
-                # Bandstop filter
-                DataFilter.perform_bandstop(
-                    channel_data, self.sampling_rate, 58.0, 62.0, 4, FilterTypes.BUTTERWORTH.value, 1.0
-                )
-
-                # Remove environmental noise
-                DataFilter.remove_environmental_noise(
-                    channel_data, self.sampling_rate, NoiseTypes.FIFTY_AND_SIXTY.value
-                )
-
-                # Update filtered data buffer with new samples
-                self.filtered_exg_buffer[count, -num_samples:] = channel_data[-num_samples:]
-
-                # Update plot
-                self.curves[count].setData(self.filtered_exg_buffer[count])
-
-            # Update LSL streams
+            # Update LSL streams with new data
             self.update_lsl_streams(num_samples)
 
         except BrainFlowError as e:
@@ -265,6 +238,19 @@ class BrainFlowGraph(BaseGraph):
             logging.error(f"Unexpected error in update function: {e}")
             self.release_board()
             sys.exit(1)
+
+    def run(self):
+        """
+        Continuously updates the board data until interrupted.
+        """
+        logging.info("Starting data acquisition loop. Press Ctrl+C to stop.")
+        try:
+            while True:
+                self.update()
+                time.sleep(1/self.fps)  # ~50 Hz update rate
+        except KeyboardInterrupt:
+            logging.info("KeyboardInterrupt received, stopping data acquisition.")
+            self.cleanup()
 
     def release_board(self):
         """
@@ -280,31 +266,30 @@ class BrainFlowGraph(BaseGraph):
 
     def cleanup(self):
         """
-        Overrides the cleanup method to release the board.
+        Releases the board and performs cleanup.
         """
         self.release_board()
+        logging.info("Cleanup complete. Exiting.")
 
 def main():
-    # Configure logging (if not already configured in BaseGraph)
     logging.basicConfig(
-        level=logging.DEBUG,  # Set to DEBUG for detailed logs
+        level=logging.DEBUG,
         format='[%(asctime)s] [%(levelname)s] %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
+        handlers=[logging.StreamHandler(sys.stdout)]
     )
 
-    # Enable BrainFlow's internal logger
+    # Enable BrainFlow's internal logger if needed
     BoardShim.enable_dev_board_logger()
 
     try:
         serial_port = '/dev/cu.usbserial-DP04VY9X'
-        board_id = BoardIds.CYTON_BOARD
+        board_id = BoardIds.CYTON_DAISY_BOARD
         is_emg = True
 
-        brainflow_graph = BrainFlowGraph(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
-                                         lsl_raw=False, lsl_filtered=True,
-                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8])
+        brainflow_graph = BrainFlowServer(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
+                                         lsl_raw=True, lsl_filtered=True,
+                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+        brainflow_graph.run()
     except RuntimeError as e:
         logging.error(f"RuntimeError: {e}")
         sys.exit(1)

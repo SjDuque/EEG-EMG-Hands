@@ -5,7 +5,7 @@ from exg.ema import EMA
 from tensorflow.keras.models import load_model
 import pylsl
 
-class RealTimePredictor:
+class HandPredictionServer:
     def __init__(self,
                  filtered_exg_stream: str,
                  model_dir: str,
@@ -122,8 +122,8 @@ def main():
     # Path to the trained model
     model_dir = "data/s_4_26_25/models/model_0"
 
-    # Initialize RealTimePredictor
-    predictor = RealTimePredictor(
+    # Initialize HandPredictionServer
+    predictor = HandPredictionServer(
         filtered_exg_stream="filtered_exg",
         model_dir=model_dir,
         fps=5
