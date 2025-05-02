@@ -1,6 +1,7 @@
 import serial
 import sys
 import time
+import logging
 from typing import List, Tuple, Union
 
 class HandSerial:
@@ -29,10 +30,27 @@ class HandSerial:
         self.prev_servo_angles = [0.5] * self.num_servos
         self.connect()
         
+        if not self.serial_port:
+            self.serial_port = self._find_serial_port()
+        
         if left_hand == right_hand or right_hand:
             self.right_hand = True
         else:
             self.right_hand = False
+            
+    def _find_serial_port(self):
+        """
+        _summary_: Find available serial ports.
+        """
+        # Find port with description "ch340"
+        for port in serial.tools.list_ports.comports():
+            # Check for "ch340" in the description
+            if 'ch340' in port.description:
+                return port.device
+        # If no specific port is found, return None
+        logging.warning("No suitable serial port found.")
+        raise RuntimeError("No suitable ESP32 serial port found.")
+        
         
     def connect(self):
         """

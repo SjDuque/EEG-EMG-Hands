@@ -2,11 +2,9 @@ import pylsl
 from hand_serial import HandSerial
 import time
             
-def client_send_serial(lsl_name:str, left_hand:bool=True):
+def client_send_serial(lsl_name:str, serial_port:str=None, left_hand:bool=False, right_hand:bool=False):
     # ------------------ Configuration ------------------
-    SERIAL_PORT = '/dev/cu.usbserial-1140'  # Set to None to auto-detect
-    
-    hand_serial = HandSerial(SERIAL_PORT)
+    hand_serial = HandSerial(serial_port, left_hand=left_hand, right_hand=right_hand)
 
     # Resolve LSL streams
     print(f"Looking for {lsl_name} stream...")

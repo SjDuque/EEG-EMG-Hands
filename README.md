@@ -1,34 +1,132 @@
-# EEG-EMG-Hands
-Controlling a robotic hand using OpenBCI Cyton.
+# EEG-EMG-Hands 🤖🧠  
+Control a robotic hand using muscle signals (sEMG) and brainwaves (EEG) with OpenBCI and Brainflow.
 
-## Training a machine learning model to detect when a hand is closed (openbci/openbci_focus_hand.py)
-Programmed a machine learning model to infer when my hand is closed using [EMG](https://docs.openbci.com/GettingStarted/Biosensing-Setups/EMGSetup/) (aka muscle reading).
+This project uses an OpenBCI Cyton/Daisy board, but is compatible with any [supported Brainflow board](https://brainflow.readthedocs.io/en/stable/SupportedBoards.html).
 
-Initially the model is untrained so there is no response. Pressing 'T' enables training mode, where I calibrate what actions correspond to green or red. I decided to set green to closing and red to opening my hand.
+---
 
-Notice after training that the robotic hand closes and opens with mine.
+## 🚀 How to Use
 
-Note: There is no webcam use in this example, I am using an OpenBCI Cyton to read muscle activity using electrodes attached to my forearm.
+### 1. Set Up the Python Environment
 
-https://github.com/user-attachments/assets/c013bcee-4476-4542-a547-f4df26d3af68
+Recommended: Python 3.10  
+Create and activate a virtual environment:
 
-## Controlling a robotic arm using mediapipe/camera (src/MediapipeEsp32.py)
-Using hand landmark detection from Mediapipe, I calculated the angles of my fingers and mapped them to the servos on the robotic hand.
+```bash
+python3.10 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-https://github.com/user-attachments/assets/08382008-1f0d-4633-aaa4-c096e12325b7
+More info: [Python venv documentation](https://docs.python.org/3/library/venv.html)
 
-## Performance
+---
 
-`src/mediapipe_lsl.py`
-Using a 260 hz Camera
-- M4 Mac Mini 16 GB: ~ 230 FPS
+### 2. Stream EXG (EEG/EMG) Data
 
-## FOR MAC USERS
-Make sure to disable 'Reactions' by clicking the green camera icon and ensuring 
-Reactions isn't enabled. This is especially important when running at over 200 FPS
-as MacOS will randomly detect a thumbs up, freezing the program.
+Open `exg/brainflow_server.py` and change `BOARD_ID` to your board (e.g. 
+BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD)
 
-TODO:
-- Make finger angle detection more robust (sometimes fails)
-  - Remove thresholds from recording
-- Make a txt file for the thresholds/params
+**On macOS:**
+```bash
+sh stream_brainflow.sh
+```
+
+If you're on another OS or the script fails, run the Python commands inside `stream_brainflow.sh` manually.
+
+---
+
+### 3. Stream Prompt Data
+
+**On macOS:**
+```bash
+sh stream_prompt.sh
+```
+
+This streams prompt (command) labels used for supervised learning.
+
+If you're on another OS or the script fails, run the Python commands inside `stream_prompt.sh` manually.
+
+---
+
+### 4. Connect the ESP32 Hand (Work in Progress)
+
+1. Flash `esp32/hand_esp.ino` to your ESP32.
+2. Connect the servo controller to the prosthetic hand and ESP32.
+3. Run:
+```bash
+sh hand_prompt.sh
+```
+
+---
+
+### 5. Record Data to CSV
+
+In `record_lsl_csv.py`, set:
+
+```python
+SESSION_DIR = "data/s_MM_DD_YY"
+```
+
+Then run:
+```bash
+python record_lsl_csv.py
+```
+
+To record multiple sessions in one day (e.g., new electrode placements), use:
+
+```
+data/s_MM_DD_YY_1
+data/s_MM_DD_YY_2
+```
+
+Name it anything inside `data/` if consistent.
+
+---
+
+### 6. Train the Model
+
+Open the Jupyter notebook:
+
+```bash
+jupyter notebook train_model.ipynb
+```
+
+This notebook will:
+- Load your recorded data
+- Preprocess signals
+- Train and save a machine learning model
+
+---
+
+### 7. Run Real-Time Inference
+
+In `hand_prediction_server.py`, set the path to your trained model:
+
+```python
+MODEL_DIR = "models/your_model_directory"
+```
+
+Stop the existing `hand_client.py` terminal (from `hand_prompt.sh`)  
+Then run:
+
+```bash
+sh hand_prediction.sh
+```
+
+This starts real-time prediction using live EMG/EEG signals.
+
+---
+
+## 🧩 Additional Features
+
+- ✅ Control prosthetic hand via keyboard or webcam (Instructions coming soon)
+- 📉 Built-in filters (EMA, SMA, IIR) in `exg/`
+
+---
+
+## ✅ TODO
+
+- [ ] Make each server/client threadable
+- [ ] Create a unified launcher for all services
+- [ ] Combine training and real-time inference with mode toggle

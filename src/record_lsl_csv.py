@@ -4,6 +4,9 @@ import time
 import os
 import csv
 import re
+import json
+
+SESSION_DIR = "data/s_05_01_25"
 
 class LSLRecorder:
     """
@@ -13,15 +16,15 @@ class LSLRecorder:
     def __init__(
         self,
         streams: dict[str, str],
-        csv_dir: str,
-        update_interval: float = 0.01,
+        session_dir: str,
+        update_interval: float = 0.1,
     ):
         """
         :param streams: Mapping from key names to LSL stream names.
-        :param csv_dir: Base directory for saving CSVs.
+        :param session_dir: Base directory for saving CSVs.
         :param update_interval: Sleep interval between pulls.
         """
-        self.csv_dir = csv_dir
+        self.session_dir = session_dir
         self.update_interval = update_interval
         self._proc_flags = (
             pylsl.proc_clocksync |
@@ -32,20 +35,22 @@ class LSLRecorder:
         self.streams = streams
 
         # Ensure base directory exists
-        os.makedirs(self.csv_dir, exist_ok=True)
+        os.makedirs(self.session_dir, exist_ok=True)
         # Determine next session index
-        existing = [d for d in os.listdir(self.csv_dir)
-                    if os.path.isdir(os.path.join(self.csv_dir, d))]
+        existing = [d for d in os.listdir(self.session_dir)
+                    if os.path.isdir(os.path.join(self.session_dir, d))]
         indices = []
         for d in existing:
             m = re.match(r"r_(\d+)$", d)
             if m:
                 indices.append(int(m.group(1)))
         next_idx = max(indices) + 1 if indices else 0
-        session_dir = os.path.join(self.csv_dir, f"r_{next_idx}")
-        os.makedirs(session_dir, exist_ok=True)
+        recording_dir = os.path.join(self.session_dir, f"r_{next_idx}")
+        os.makedirs(recording_dir, exist_ok=True)
 
         self._configs = {}
+        
+        freq_info = {}
 
         for key, name in self.streams.items():
             # Resolve and open LSL inlet
@@ -57,9 +62,10 @@ class LSLRecorder:
             )
             info = inlet.info()
             nch = info.channel_count()
+            freq_info[f'{key}_fs'] = info.nominal_srate()
 
             # Prepare CSV file and writer in the session directory
-            fname = os.path.join(session_dir, f"{key}.csv")
+            fname = os.path.join(recording_dir, f"{key}.csv")
             f = open(fname, 'w', newline='')
             writer = csv.writer(f)
 
@@ -75,6 +81,22 @@ class LSLRecorder:
 
             self._configs[key] = {'inlet': inlet, 'writer': writer, 'file': f}
             print(f"[{key}] writing to {fname} with channels {labels}")
+            
+        # Write recording info to json file
+        info_fname = os.path.join(session_dir, "frequency_info.json")
+        # If the file already exists, load existing data
+        if os.path.exists(info_fname):
+            with open(info_fname, 'r') as f:
+                freq_info = json.load(f)
+                # Compare the new data with the existing data, if they are different, raise an error
+                if freq_info != freq_info:
+                    raise RuntimeError(f"Frequency info file {info_fname} already exists and is different from the new data.")
+            print(f"Frequency info file {info_fname} already exists.")
+        else:
+            # If the file does not exist, create it
+            with open(info_fname, 'w') as f:
+                json.dump(freq_info, f, indent=4)
+            print(f"Frequency info file {info_fname} created.")
 
     def update(self):
         """Pull new chunks and write to CSV immediately."""
@@ -108,7 +130,7 @@ def main():
             'exg': "raw_exg",
             'prompt': "finger_prompt"
         },
-        csv_dir="data/s_4_26_25"
+        session_dir=SESSION_DIR
     )
     recorder.collect_and_close()
 

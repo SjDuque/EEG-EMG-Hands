@@ -5,6 +5,10 @@ from exg.ema import EMA
 from tensorflow.keras.models import load_model
 import pylsl
 
+# Path to the trained model
+MODEL_DIR = "data/s_04_29_25/models/model_0"
+
+
 class HandPredictionServer:
     def __init__(self,
                  filtered_exg_stream: str,
@@ -25,11 +29,6 @@ class HandPredictionServer:
         self.num_fingers = 5
         self.prev_average_output = np.zeros(self.num_fingers)
         
-        self.ema_processor = EMA(
-            window_sizes=self.window_sizes,
-            num_channels=16,
-            fs=125
-        )
         self._proc_flags = (
             pylsl.proc_clocksync |
             pylsl.proc_dejitter |
@@ -43,6 +42,15 @@ class HandPredictionServer:
             raise RuntimeError(f"No LSL stream named '{filtered_exg_stream}' found.")
         self.exg_inlet = pylsl.StreamInlet(
             found[0], max_buflen=1024, processing_flags=self._proc_flags
+        )
+        
+        # Initialize the EMA processor
+        num_channels = self.exg_inlet.info().channel_count()
+        fs = self.exg_inlet.info().nominal_srate()
+        self.ema_processor = EMA(
+            window_sizes=self.window_sizes,
+            num_channels=num_channels,
+            fs=fs
         )
         
         # Start the lsl stream
@@ -78,7 +86,7 @@ class HandPredictionServer:
         # EMA processing
         ema_data = self.ema_processor.process(data)
         ema_data = self.ema_processor.results_to_df(ema_data)
-        ema_data = ema_data[self.ema_columns].values
+        ema_data = ema_data[self.ema_columns[:8]].values
         # Preprocess the data
         ema_data = self.preprocess_ema(ema_data)
         
@@ -119,13 +127,11 @@ class HandPredictionServer:
                 time.sleep(sleep_time)
 
 def main():
-    # Path to the trained model
-    model_dir = "data/s_4_26_25/models/model_0"
 
     # Initialize HandPredictionServer
     predictor = HandPredictionServer(
         filtered_exg_stream="filtered_exg",
-        model_dir=model_dir,
+        model_dir=MODEL_DIR,
         fps=5
     )
 

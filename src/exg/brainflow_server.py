@@ -9,25 +9,23 @@ import serial.tools.list_ports
 
 from iir import IIR
 
-def find_serial_port():
-    """
-    Automatically detect the serial port for the OpenBCI board.
-    Returns the port name as a string, or raises an exception if not found.
-    """
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        # Check for specific keywords or VID/PID
-        if 'OpenBCI' in port.description or 'usbserial' in port.device.lower():
-            return port.device
-    logging.warning("OpenBCI board not found. Using synthetic board instead.")
-    return ''
+BOARD_ID = BoardIds.SYNTHETIC_BOARD  # Default to synthetic board for testing
 
 class BrainFlowServer:
-    def __init__(self, fps=None, board_id=BoardIds.SYNTHETIC_BOARD, is_emg=False, 
-                 serial_port='', lsl_raw=True, lsl_filtered=True,
-                 include_channels=None):
+    def __init__(self, fps:int=None, board_id:BoardIds=BoardIds.SYNTHETIC_BOARD, is_emg:bool=False, 
+                 serial_port:str='', lsl_raw:bool=True, lsl_filtered:bool=True,
+                 include_channels:list[int]=None):
         self._init_logging()
-
+        
+        # Automatically find the serial port if not provided
+        if not serial_port and board_id is not BoardIds.SYNTHETIC_BOARD:
+            serial_port = self._find_serial_port()
+            if not serial_port:
+                logging.error("No serial port found. Please specify a valid serial port.")
+                sys.exit(1)
+        logging.info(f"Using serial port: {serial_port}")
+        
+        # Set board parameters
         self.params = BrainFlowInputParams()
         self.params.serial_port = serial_port
         self.board_id = board_id
@@ -176,6 +174,18 @@ class BrainFlowServer:
             )
             self.filtered_lsl_outlet = StreamOutlet(self.filtered_lsl_info)
             logging.info("Filtered LSL initialized.")
+            
+    def _find_serial_port(self):
+        """
+        Automatically detect the serial port for the OpenBCI board.
+        Returns the port name as a string, or raises an exception if not found.
+        """
+        for port in serial.tools.list_ports.comports():
+            # Check for specific keywords or VID/PID
+            if 'FT231X USB UART' in port.description:
+                return port.device
+        logging.warning("OpenBCI board not found. Try setting your own serial port in brainflow_server.py.")
+        return ''
 
     def update_lsl_streams(self, num_samples):
         """
@@ -282,13 +292,14 @@ def main():
     BoardShim.enable_dev_board_logger()
 
     try:
-        serial_port = '/dev/cu.usbserial-DP04VY9X'
-        board_id = BoardIds.CYTON_DAISY_BOARD
         is_emg = True
+        serial_port = ''  # Automatically find the serial port
+        include_channels = None  # Use all channels by default
+        # include_channels = [1, 2, 3, 4, 5, 6, 7, 8] # If you want specific channels
 
-        brainflow_graph = BrainFlowServer(board_id=board_id, is_emg=is_emg, serial_port=serial_port,
+        brainflow_graph = BrainFlowServer(board_id=BOARD_ID, is_emg=is_emg, serial_port=serial_port,
                                          lsl_raw=True, lsl_filtered=True,
-                                         include_channels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+                                         include_channels=include_channels)
         brainflow_graph.run()
     except RuntimeError as e:
         logging.error(f"RuntimeError: {e}")
