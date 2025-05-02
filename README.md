@@ -3,6 +3,10 @@ Control a robotic hand using muscle signals (sEMG) and brainwaves (EEG) with Ope
 
 This project uses an OpenBCI Cyton/Daisy board, but is compatible with any [supported Brainflow board](https://brainflow.readthedocs.io/en/stable/SupportedBoards.html).
 
+https://github.com/user-attachments/assets/e529cad6-1202-485f-9131-40d391461205
+
+Unlike gesture recognition, this project allows you to control each finger individually.
+
 ---
 
 ## 🚀 How to Use
