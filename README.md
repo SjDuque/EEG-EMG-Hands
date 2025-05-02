@@ -125,6 +125,9 @@ This starts real-time prediction using live EMG/EEG signals.
 ## 🧩 Additional Features
 
 - ✅ Control prosthetic hand via keyboard or webcam (Instructions coming soon)
+
+https://github.com/user-attachments/assets/08382008-1f0d-4633-aaa4-c096e12325b7
+
 - 📉 Built-in filters (EMA, SMA, IIR) in `exg/`
 
 ---
