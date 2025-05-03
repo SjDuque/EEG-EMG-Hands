@@ -8,6 +8,10 @@ PYTHON=".venv/bin/python"
 
 # Path to the Python scripts (relative to the script location)
 SCRIPT_1="src/hand_tracking/prompt_server.py"
+SCRIPT_2="src/hand_tracking/prompt_client.py"
 
 # Open the first script in a new terminal
 osascript -e "tell application \"Terminal\" to do script \"cd $SCRIPT_DIR && $PYTHON $SCRIPT_1\""
+
+# Open the second script in a new terminal
+osascript -e "tell application \"Terminal\" to do script \"cd $SCRIPT_DIR && $PYTHON $SCRIPT_2\""

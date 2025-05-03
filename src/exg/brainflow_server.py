@@ -6,15 +6,18 @@ import datetime
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds, BrainFlowError
 from pylsl import StreamInfo, StreamOutlet, local_clock
 import serial.tools.list_ports
+import threading
 
 from iir import IIR
 
 BOARD_ID = BoardIds.SYNTHETIC_BOARD  # Default to synthetic board for testing
 
-class BrainFlowServer:
+class BrainFlowServer(threading.Thread):
     def __init__(self, fps:int=None, board_id:BoardIds=BoardIds.SYNTHETIC_BOARD, is_emg:bool=False, 
                  serial_port:str='', lsl_raw:bool=True, lsl_filtered:bool=True,
                  include_channels:list[int]=None):
+        super().__init__()  # initialize the Thread
+        self.running = False
         self._init_logging()
         
         # Automatically find the serial port if not provided
@@ -66,40 +69,12 @@ class BrainFlowServer:
         self.fps = fps
 
         # Configure board if EMG is enabled
-        if self.is_emg and self.board_id in (BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
-            try:
-                # Configuration parameters
-                POWER_DOWN = 0  # EMG is 0 = Normal operation
-                GAIN_SET = 6    # EMG is 6 = Gain 24
-                INPUT_TYPE_SET = 0  # EMG is 0 = Normal electrode input
-                BIAS_SET = 1    # EMG is 1
-                SRB2_SET = 0    # EMG is 0
-                SRB1_SET = 0    # EMG is 0
-                
-                # Channel names: 1 2 3 4 5 6 7 8 Q W E R T Y U I
-                channel_names = ['1', '2', '3', '4', '5', '6', '7', '8', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I']
-                # Ensure each value is a single digit
-                def valid_value(value):
-                    return len(str(value)) == 1
-
-                if not all(map(valid_value, [POWER_DOWN, GAIN_SET, INPUT_TYPE_SET, BIAS_SET, SRB2_SET, SRB1_SET])):
-                    raise ValueError("Invalid value for config settings (All must be a single character).")
-
-                # Set config settings for each channel
-                config_list = [f"x{channel_names[channel-1]}{POWER_DOWN}{GAIN_SET}{INPUT_TYPE_SET}{BIAS_SET}{SRB2_SET}{SRB1_SET}X" 
-                               for channel in self.exg_channels]
-                config = ''.join(config_list)
-                if config:
-                    self.board_shim.config_board(config)
-                    logging.info("Configured settings for EMG.")
-            except BrainFlowError as e:
-                logging.error(f"Failed to configure board for EMG: {e}")
-                self.release_board()
-                sys.exit(1)
+        if self.is_emg and self.board_id in (BoardIds.GANGLION_BOARD, BoardIds.CYTON_BOARD, BoardIds.CYTON_DAISY_BOARD):
+            self._configure_openbci_emg()
 
         # Start streaming
-        stream_buffer_size = int(self.sampling_rate * 5)  # 5 seconds of data
         try:
+            stream_buffer_size = int(self.sampling_rate * 5)  # 5 seconds of data
             self.board_shim.start_stream(stream_buffer_size, '')
             logging.info("Board streaming started successfully.")
         except BrainFlowError as e:
@@ -107,18 +82,10 @@ class BrainFlowServer:
             self.release_board()
             sys.exit(1)
 
-        # Set the buffer size based on the window length (5 seconds)
-        self.buffer_size = int(self.sampling_rate * 5)
-
         # Initialize LSL streams
         self.lsl_raw = lsl_raw
         self.lsl_filtered = lsl_filtered
         self._init_lsl_streams()
-
-        # Initialize data buffers
-        self.raw_exg_buffer = np.zeros((len(self.exg_channels), self.buffer_size))
-        self.filtered_exg_buffer = np.zeros((len(self.exg_channels), self.buffer_size))
-        self.timestamp_buffer = np.zeros(self.buffer_size)
 
         # Compute time difference for LSL timestamps
         self.time_diff = local_clock() - datetime.datetime.now().timestamp()
@@ -186,25 +153,49 @@ class BrainFlowServer:
                 return port.device
         logging.warning("OpenBCI board not found. Try setting your own serial port in brainflow_server.py.")
         return ''
+    
+    def _configure_openbci_emg(self):
+        try:
+            # Configuration parameters
+            POWER_DOWN = 0  # EMG is 0 = Normal operation
+            GAIN_SET = 6    # EMG is 6 = Gain 24
+            INPUT_TYPE_SET = 0  # EMG is 0 = Normal electrode input
+            BIAS_SET = 1    # EMG is 1
+            SRB2_SET = 0    # EMG is 0
+            SRB1_SET = 0    # EMG is 0
+            
+            # Channel names: 1 2 3 4 5 6 7 8 Q W E R T Y U I
+            channel_names = ['1', '2', '3', '4', '5', '6', '7', '8', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I']
+            # Ensure each value is a single digit
+            def valid_value(value):
+                return len(str(value)) == 1
 
-    def update_lsl_streams(self, num_samples):
+            if not all(map(valid_value, [POWER_DOWN, GAIN_SET, INPUT_TYPE_SET, BIAS_SET, SRB2_SET, SRB1_SET])):
+                raise ValueError("Invalid value for config settings (All must be a single character).")
+
+            # Set config settings for each channel
+            config_list = [f"x{channel_names[channel-1]}{POWER_DOWN}{GAIN_SET}{INPUT_TYPE_SET}{BIAS_SET}{SRB2_SET}{SRB1_SET}X" 
+                            for channel in self.exg_channels]
+            config = ''.join(config_list)
+            if config:
+                self.board_shim.config_board(config)
+                logging.info("Configured settings for EMG.")
+        except BrainFlowError as e:
+            logging.error(f"Failed to configure board for EMG: {e}")
+            self.release_board()
+            sys.exit(1)
+
+    def update_lsl_streams(self, raw_exg:np.ndarray, filtered_exg:np.ndarray, timestamp_data:np.ndarray):
         """
         Pushes the latest data chunks to the LSL streams.
         
         :param num_samples: Number of new samples to push
         """
-        if num_samples == 0:
-            return
-
-        raw_data = self.raw_exg_buffer[:, -num_samples:].copy()
-        filtered_data = self.filtered_exg_buffer[:, -num_samples:].copy()
-        timestamp_data = self.timestamp_buffer[-num_samples:].copy()
-
         if self.lsl_raw:
-            self.raw_lsl_outlet.push_chunk(raw_data.T.tolist(), timestamp_data.tolist())
+            self.raw_lsl_outlet.push_chunk(raw_exg.tolist(), timestamp_data.tolist())
 
         if self.lsl_filtered:
-            self.filtered_lsl_outlet.push_chunk(filtered_data.T.tolist(), timestamp_data.tolist())
+            self.filtered_lsl_outlet.push_chunk(filtered_exg.tolist(), timestamp_data.tolist())
 
     def update(self):
         """
@@ -213,32 +204,16 @@ class BrainFlowServer:
         """
         try:
             # Fetch the latest samples from the board
-            new_data = self.board_shim.get_board_data()
+            new_data = self.board_shim.get_board_data().T # Shape: (num_samples, num_channels)
             if new_data is None or new_data.size == 0:
                 return
 
-            num_samples = new_data.shape[1]
-            exg_data = new_data[self.exg_channels, :]  # shape: (channels, num_samples)
-            timestamp_data = new_data[self.timestamp_channel, :] + self.time_diff
+            raw_exg = new_data[:, self.exg_channels] # Shape: (num_samples, num_channels)
+            timestamp_data = new_data[:, self.timestamp_channel] + self.time_diff # Shape: (num_samples, 1)
 
-            # Update timestamp buffer
-            self.timestamp_buffer = np.roll(self.timestamp_buffer, -num_samples)
-            self.timestamp_buffer[-num_samples:] = timestamp_data
-
-            # Update raw data buffer
-            self.raw_exg_buffer = np.roll(self.raw_exg_buffer, -num_samples, axis=1)
-            self.raw_exg_buffer[:, -num_samples:] = exg_data
-
-            # Apply IIR filtering to the new data chunk:
-            #   - Transpose data so rows=samples, columns=channels.
-            new_chunk = exg_data.T  # shape: (num_samples, num_channels)
-            filtered_chunk = self.iir_filter.process_inplace(new_chunk)
-            # Store the filtered chunk back in buffer (transpose back to channels x samples)
-            self.filtered_exg_buffer = np.roll(self.filtered_exg_buffer, -num_samples, axis=1)
-            self.filtered_exg_buffer[:, -num_samples:] = filtered_chunk.T
-
+            filtered_exg = self.iir_filter.process(raw_exg) # Shape: (num_samples, num_channels)
             # Update LSL streams with new data
-            self.update_lsl_streams(num_samples)
+            self.update_lsl_streams(raw_exg, filtered_exg, timestamp_data)
 
         except BrainFlowError as e:
             logging.error(f"BrainFlowError in update function: {e}")
@@ -251,16 +226,25 @@ class BrainFlowServer:
 
     def run(self):
         """
-        Continuously updates the board data until interrupted.
+        Threaded data acquisition loop.
         """
-        logging.info("Starting data acquisition loop. Press Ctrl+C to stop.")
+        self.running = True
+        logging.info("Threaded BrainFlowServer started.")
         try:
-            while True:
+            while self.running:
                 self.update()
-                time.sleep(1/self.fps)  # ~50 Hz update rate
-        except KeyboardInterrupt:
-            logging.info("KeyboardInterrupt received, stopping data acquisition.")
+                time.sleep(1 / self.fps)
+        except Exception as e:
+            logging.error(f"Exception in BrainFlowServer thread: {e}")
             self.cleanup()
+            
+    def stop(self):
+        """
+        Safely stop the server.
+        """
+        logging.info("Stopping BrainFlowServer thread.")
+        self.running = False
+        self.cleanup()
 
     def release_board(self):
         """
@@ -282,6 +266,7 @@ class BrainFlowServer:
         logging.info("Cleanup complete. Exiting.")
 
 def main():
+    # Initialize logging
     logging.basicConfig(
         level=logging.DEBUG,
         format='[%(asctime)s] [%(levelname)s] %(message)s',
@@ -290,28 +275,19 @@ def main():
 
     # Enable BrainFlow's internal logger if needed
     BoardShim.enable_dev_board_logger()
-
+    
+    # Create and start the BrainFlowServer
+    logging.info("Starting BrainFlowServer...")
+    server = BrainFlowServer(board_id=BOARD_ID, is_emg=True)
+    server.start()
+    # Wait for the server to start
     try:
-        is_emg = True
-        serial_port = ''  # Automatically find the serial port
-        include_channels = None  # Use all channels by default
-        # include_channels = [1, 2, 3, 4, 5, 6, 7, 8] # If you want specific channels
-
-        brainflow_graph = BrainFlowServer(board_id=BOARD_ID, is_emg=is_emg, serial_port=serial_port,
-                                         lsl_raw=True, lsl_filtered=True,
-                                         include_channels=include_channels)
-        brainflow_graph.run()
-    except RuntimeError as e:
-        logging.error(f"RuntimeError: {e}")
-        sys.exit(1)
-    except BrainFlowError as e:
-        logging.error(f"BrainFlowError: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logging.error(f"Unhandled exception: {e}")
-        sys.exit(1)
-    finally:
-        logging.info('Program terminated.')
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logging.info("Stopping BrainFlowServer...")
+        server.stop()
+        server.join()
 
 if __name__ == '__main__':
     main()

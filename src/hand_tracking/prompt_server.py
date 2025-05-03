@@ -25,6 +25,8 @@ class FingerPromptStreamer(threading.Thread):
             channels.append_child("channel").append_child_value("label", name)
 
         self.prompt_outlet = pylsl.StreamOutlet(self.prompt_info)
+        
+        print("Labels:", self.prompt_labels)
 
     def generate_prompt_lists(self):
         result = []
@@ -50,6 +52,7 @@ class FingerPromptStreamer(threading.Thread):
         while self.running:
             prompt_int = [int(prompt) for prompt in current_prompt]
             self.prompt_outlet.push_sample(prompt_int)
+            print(f"Sent prompt list: {prompt_int}")
 
             time.sleep(self.prompt_switch_interval)
 
@@ -58,7 +61,6 @@ class FingerPromptStreamer(threading.Thread):
                 np.random.shuffle(self.prompt_lists)
             current_prompt = self.prompt_lists[self.prompt_index]
 
-            print(f"Switched to prompt list: {prompt_int}")
 
     def stop(self):
         self.running = False
