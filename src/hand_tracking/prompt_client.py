@@ -1,6 +1,7 @@
 import sys
 import math
 import numpy as np
+import signal
 from PyQt5.QtWidgets import QWidget, QApplication
 from PyQt5.QtGui import QPainter, QColor, QPen
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -121,7 +122,17 @@ class HandWidget(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    w = HandWidget(flip=False)
+    
+    # Allow Python to catch SIGINT (Ctrl+C)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    w = HandWidget(flip=True)
     w.setWindowTitle("Hand Prompt Client")
     w.show()
+    
+    # Optional: ensure app responsiveness to Ctrl+C by starting a QTimer
+    timer = QTimer()
+    timer.start(100)
+    timer.timeout.connect(lambda: None)
+    
     sys.exit(app.exec_())

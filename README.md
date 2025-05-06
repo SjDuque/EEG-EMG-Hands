@@ -137,3 +137,7 @@ https://github.com/user-attachments/assets/08382008-1f0d-4633-aaa4-c096e12325b7
 - [ ] Make each server/client threadable
 - [ ] Create a unified launcher for all services
 - [ ] Combine training and real-time inference with mode toggle
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
